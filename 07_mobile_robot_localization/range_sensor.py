@@ -103,33 +103,36 @@ class RangeSensor:
 
 
 
-sensor = RangeSensor()
+if __name__ == '__main__':
 
-sensor_pdf = sensor.compute_pdf(z=3)
-list_z = []
-list_x = []
-for i in range(1000):
-    z = sensor.measure()
-    list_x.append(i)
-    list_z.append(z)
+    sensor = RangeSensor()
+
+    sensor_pdf = sensor.compute_pdf(z=3)
+    list_z = []
+    list_x = []
+    for i in range(1000):
+        z = sensor.measure()
+        list_x.append(i)
+        list_z.append(z)
 
 
-plt.figure('pdf')
-plt.title('beam model pdf')
-plt.plot(sensor_pdf)
-plt.xlabel('z')
-plt.ylabel('p(z|z*)')
+    plt.figure('pdf')
+    plt.title('beam model pdf')
+    plt.plot(sensor_pdf)
+    plt.xlabel('z')
+    plt.ylabel('p(z|z*)')
 
-plt.figure('measurements')
-plt.scatter(list_x, list_z)
-plt.ylabel('z')
-plt.xlabel('t')
+    plt.figure('measurements')
+    plt.scatter(list_x, list_z)
+    plt.ylabel('z')
+    plt.xlabel('t')
 
-plt.figure('hist')
-plt.hist(list_z, bins=50)
+    plt.figure('hist')
+    plt.hist(list_z, bins=50)
 
-plt.show()
+    plt.show()
 
 
 
         
+

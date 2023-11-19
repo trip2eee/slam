@@ -1,5 +1,5 @@
-"""Algorithm EKF_localization_known_correspondences
-   Table 7.2, p.169
+"""Algorithm EKF_localization
+   Table 7.3, p.175
 """
 
 import numpy as np
@@ -72,6 +72,21 @@ class Robot:
         robot.x_pred = x_pred
         robot.P_pred = P_pred
 
+    def measure(self, landmark):
+        x_pred = self.x_pred
+        mx, my, ms = landmark
+        dx = mx - x_pred[0,0]
+        dy = my - x_pred[1,0]
+        q = dx**2 + dy**2
+
+        z = np.array([
+            [np.sqrt(q) + np.random.randn()*np.sqrt(q)*0.01],
+            [np.arctan2(dy, dx) - x_pred[2,0] + np.random.randn()*0.01],
+            [ms],
+        ])
+
+        return z
+
     def update(self):
         # measurement update
         x_pred = self.x_pred
@@ -79,9 +94,11 @@ class Robot:
 
         sum_dx = np.zeros([3,1], dtype=np.float32)
         sum_dp = np.zeros([3,3], dtype=np.float32)
-        for i in range(len(landmarks)):
-            j = i
-            mx, my, ms = landmarks[j]
+
+        # for all landmarks k in the map m
+        N = len(landmarks)
+        for k in range(N):
+            mx, my, ms = landmarks[k]
             dx = mx - x_pred[0,0]
             dy = my - x_pred[1,0]
             q = dx**2 + dy**2
@@ -93,13 +110,6 @@ class Robot:
             Qt = np.array([[sr**2, 0,     0],
                            [0,     sf**2, 0],
                            [0,     0,     ss**2]])
-                
-            # measure feature zi
-            z = np.array([
-                [np.sqrt(q) + np.random.randn()*np.sqrt(q)*0.01],
-                [np.arctan2(dy, dx) - x_pred[2,0] + np.random.randn()*0.01],
-                [ms],
-            ])
 
             # predict feature i
             z_pred = np.array([
@@ -117,16 +127,30 @@ class Robot:
             # HPH^T + Q
             St = np.matmul(np.matmul(Ht, P_pred), Ht.T) + Qt
             invSt = np.linalg.inv(St)
+
+            # for all observed features i
+            ck = 0
+            zk = None
+            min_d2 = 1e10
+            for i in range(N):
+                zi = self.measure(landmarks[i])
+                r = zi - z_pred
+
+                d2 = np.matmul(np.matmul(r.T, invSt), r)
+                if d2 < min_d2:
+                    min_d2 = d2
+                    ck = i
+                    zk = zi
+
+            assert(k == ck)
+
             # PH^T*S^-1
             Kt = np.matmul(np.matmul(P_pred, Ht.T), invSt)
             KHt = np.matmul(Kt, Ht)
 
-            # weight
-            N = len(landmarks)
+            # weight            
             w = 1.0/N
-
-            sum_dx += w*np.matmul(Kt, (z-z_pred))
-
+            sum_dx += w*np.matmul(Kt, (zk-z_pred))
             # the diagonal term of KHt shall be less than 1 to make covariances positive.
             sum_dp += w*KHt
 
@@ -200,7 +224,7 @@ def draw_map(robot):
     plt.gca().invert_yaxis()
     plt.xlabel('x {}m'.format(res_map))
     plt.ylabel('y {}m'.format(res_map))
-    
+
     plt.draw()
     plt.waitforbuttonpress(0)
     plt.close(fig)

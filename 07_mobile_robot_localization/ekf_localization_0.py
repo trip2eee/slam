@@ -11,10 +11,129 @@ landmarks = [
     [10, 0, 2]
 ]
 
-x_pose = np.array([[1, 1, 0]], dtype=np.float32).T
-P_pose = np.array([[5**2, 0, 0], 
-                   [0, 5**2, 0],
-                   [0, 0, 1**2]], dtype=np.float32)
+dt = 0.1
+
+class Robot:
+    def __init__(self):
+
+        x_pose = np.array([[1, 1, 0]], dtype=np.float32).T
+        P_pose = np.array([[5**2, 0, 0], 
+                           [0, 5**2, 0],
+                           [0, 0, 1**2]], dtype=np.float32)
+
+        self.x = x_pose
+        self.P = P_pose
+
+        self.x_pred = x_pose.copy()
+        self.P_pred = P_pose.copy()
+
+        self.x_gt = x_pose.copy()
+    
+    def predict(self, ut):
+        # control ut
+        vt, wt = ut
+
+        # compute ground truth
+        x_gt = self.x_gt[0,0]
+        y_gt = self.x_gt[1,0]
+        ha_gt = self.x_gt[2,0]
+        self.x_gt[0,0] = x_gt - vt/wt*np.sin(ha_gt) + vt/wt*np.sin(ha_gt+wt*dt)
+        self.x_gt[1,0] = y_gt + vt/wt*np.cos(ha_gt) - vt/wt*np.cos(ha_gt+wt*dt)
+        self.x_gt[2,0] = ha_gt + wt*dt
+
+        # motion update (prediction)
+        vt += np.random.randn()*0.1
+        wt += np.random.randn()*0.1
+
+        x  = robot.x[0,0]
+        y  = robot.x[1,0]
+        ha = robot.x[2,0]   # heading angle        
+        
+        xp = x - vt/wt*np.sin(ha) + vt/wt*np.sin(ha+wt*dt)
+        yp = y + vt/wt*np.cos(ha) - vt/wt*np.cos(ha+wt*dt)
+        hap = ha + wt*dt
+        x_pred = np.array([[xp], [yp], [hap]])
+
+        Gt = np.array([[1, 0, vt/wt*np.cos(ha) - vt/wt*np.cos(ha+wt*dt)],
+                       [0, 1, vt/wt*np.sin(ha) - vt/wt*np.sin(ha+wt*dt)],
+                       [0, 0, 1]])
+
+        # process noise covariance
+        sx  = 0.1
+        sy  = 0.1
+        sha = 0.02
+        Rt = np.array([[sx**2, 0,     0],
+                       [0,     sy**2, 0],
+                       [0,     0,     sha**2]])
+        
+        P_pose = robot.P
+        P_pred = np.matmul(np.matmul(Gt, P_pose), Gt.T) + Rt
+
+        robot.x_pred = x_pred
+        robot.P_pred = P_pred
+
+    def update(self):
+        # measurement update
+        x_pred = self.x_pred
+        P_pred = self.P_pred        
+
+        sum_dx = np.zeros([3,1], dtype=np.float32)
+        sum_dp = np.zeros([3,3], dtype=np.float32)
+        for i in range(len(landmarks)):
+            j = i
+            mx, my, ms = landmarks[j]
+            dx = mx - x_pred[0,0]
+            dy = my - x_pred[1,0]
+            q = dx**2 + dy**2
+
+            sr = np.sqrt(q)*0.1
+            sf = 0.1
+            ss = 1.0
+
+            Qt = np.array([[sr**2, 0,     0],
+                           [0,     sf**2, 0],
+                           [0,     0,     ss**2]])
+                
+            # measure feature zi
+            z = np.array([
+                [np.sqrt(q) + np.random.randn()*np.sqrt(q)*0.01],
+                [np.arctan2(dy, dx) - x_pred[2,0] + np.random.randn()*0.01],
+                [ms],
+            ])
+
+            # predict feature i
+            z_pred = np.array([
+                [np.sqrt(q)],
+                [np.arctan2(dy, dx) - x_pred[2,0]],
+                [ms],
+            ])
+
+            Ht = 1/q*np.array([
+                [np.sqrt(q)*dx, -np.sqrt(q)*dy,  0],
+                [           dy,             dx, -1],
+                [            0,              0,  0],
+            ])
+
+            # HPH^T + Q
+            St = np.matmul(np.matmul(Ht, P_pred), Ht.T) + Qt
+            invSt = np.linalg.inv(St)
+            # PH^T*S^-1
+            Kt = np.matmul(np.matmul(P_pred, Ht.T), invSt)
+            KHt = np.matmul(Kt, Ht)
+
+            # weight
+            N = len(landmarks)
+            w = 1.0/N
+
+            sum_dx += w*np.matmul(Kt, (z-z_pred))
+
+            # the diagonal term of KHt shall be less than 1 to make covariances positive.
+            sum_dp += w*KHt
+
+        self.x = x_pred + sum_dx
+        I = np.eye(3)
+        self.P = np.matmul(I - sum_dp, P_pred)
+
 
 res_map = 0.1   # m/pixel
 w_world = 10    # m
@@ -22,7 +141,7 @@ h_world = 10    # m
 w_map = int(w_world / res_map)  # pixels
 h_map = int(h_world / res_map)  # pixels
 
-def draw_pdf(pose, var_pose):
+def draw_pdf(robot):
     xx = np.linspace(0, w_map, w_map+1) * res_map
     yy = np.linspace(0, h_map, h_map+1) * res_map
 
@@ -30,40 +149,46 @@ def draw_pdf(pose, var_pose):
 
     pdf = np.zeros([h_map, w_map], dtype=np.float32)
 
-    mx = pose[0,0]
-    my = pose[1,0]
-    ma = pose[2,0]
+    mx = robot.x[0,0]
+    my = robot.x[1,0]
+    ma = robot.x[2,0]
 
-    sx = (var_pose[0,0])
-    sy = (var_pose[1,1])
-    sa = (var_pose[2,2])
+    S = robot.P[:2,:2]
+    invS = np.linalg.inv(S)
+    isx = invS[0,0]
+    isy = invS[1,1]
+    isxy = (invS[0,1] + invS[1,0])*0.5
 
-    S = np.array([[sx, 0], [0, sy]], dtype=np.float32)
-    print('S')
-    print(S)
     detS = np.linalg.det(S)
-  
-    t = (x-mx)**2/sx + (y-my)**2/sy
+
+    t = (x-mx)**2*isx + (y-my)**2*isy + 2*(x-mx)*(y-my)*isxy
     pdf = 1/np.sqrt(((2*np.pi)**2) * detS) * np.exp(-1/2*t)
 
     return pdf
 
-def draw_map():
-    pdf = draw_pdf(x_pose, P_pose)
+def draw_robot(x_pose, color):
+    x_robot = x_pose[0,0]/res_map
+    y_robot = x_pose[1,0]/res_map
+    ha_robot = x_pose[2,0]
+
+    plt.scatter(x_robot, y_robot, c=color)
+    # draw the robot's heading angle
+    dx = 10*np.cos(ha_robot)
+    dy = 10*np.sin(ha_robot)
+    plt.plot([x_robot, x_robot+dx], [y_robot, y_robot+dy], c=color)
+
+def draw_map(robot):
+    
+    pdf = draw_pdf(robot)
     
     plt.figure('map')
     plt.imshow(pdf)
 
     # draw robot
-    x_robot = x_pose[0,0]/res_map
-    y_robot = x_pose[1,0]/res_map
-    ha_robot = x_pose[2,0]
+    draw_robot(robot.x_gt,   'g')
+    draw_robot(robot.x_pred, 'c')
+    draw_robot(robot.x, 'b')
 
-    plt.scatter(x_robot, y_robot, c='b')
-    # draw the robot's heading angle
-    dx = 10*np.cos(ha_robot)
-    dy = 10*np.sin(ha_robot)
-    plt.plot([x_robot, x_robot+dx], [y_robot, y_robot+dy], c='b')
     for idx_lm in range(len(landmarks)):
         lm = landmarks[idx_lm]
         x_lm = int(lm[0]/res_map)
@@ -77,104 +202,23 @@ def draw_map():
     plt.ylabel('y {}m'.format(res_map))
     plt.show()
 
+robot = Robot()
+draw_map(robot)
 
-draw_map()
+for t in range(30):
 
-dt = 0.1
-for t in range(10):
-    x  = x_pose[0,0]
-    y  = x_pose[1,0]
-    ha = x_pose[2,0]
-
-    vt = 5
+    # control ut
+    vt = 3
     wt = np.pi/6
+    ut = [vt, wt]
 
     # motion update
-    xp = x - vt/wt*np.sin(ha) + vt/wt*np.sin(ha+wt*dt)
-    yp = y + vt/wt*np.cos(ha) - vt/wt*np.cos(ha+wt*dt)
-    hap = ha + wt*dt
-    x_pred = np.array([[xp],
-                       [yp],
-                       [hap]])
+    robot.predict(ut)
     
-    Gt = np.array([[1, 0, vt/wt*np.cos(ha) - vt/wt*np.cos(ha+wt*dt)],
-                   [0, 1, vt/wt*np.sin(ha) - vt/wt*np.sin(ha+wt*dt)],
-                   [0, 0, 1]])
-    Rt = np.array([[0.1**2, 0, 0],
-                   [0, 0.1**2, 0],
-                   [0, 0, 0.1**2]])
-    
-    P_pred = np.matmul(np.matmul(Gt, P_pose), Gt.T) + Rt
-
-    print(P_pred)
-
     # measurement update
-    sr = 1.0**2
-    sf = 1.0**2
-    ss = 1.0**2
-
-    Qt = np.array([[sr, 0, 0],
-                   [0, sf, 0],
-                   [0, 0, ss]])
+    robot.update()
     
-    sum_dx = np.zeros([3,1], dtype=np.float32)
-    sum_dp = np.zeros([3,3], dtype=np.float32)
-    for i in range(len(landmarks)):
-        j = i
-        mx, my, ms = landmarks[j]
-        dx = mx - xp
-        dy = my - yp
-        q = dx**2 + dy**2
-
-        # observe feature i
-        z = np.array([
-            [np.sqrt(q)],
-            [np.arctan2(dy, dx) - hap],
-            [ms],
-        ])
-
-        # predict feature i
-        z_pred = np.array([
-            [np.sqrt(q)],
-            [np.arctan2(dy, dx) - hap],
-            [ms],
-        ])
-
-        Ht = 1/q*np.array([
-            [np.sqrt(q)*dx, -np.sqrt(q)*dy,  0],
-            [           dy,             dx, -1],
-            [            0,              0,  0],
-        ])
-
-        print(Ht)
-
-        # HPH^T + Q
-        St = np.matmul(np.matmul(Ht, P_pred), Ht.T) + Qt
-        invSt = np.linalg.inv(St)
-        # PH^T*S^-1
-        Kt = np.matmul(np.matmul(P_pred, Ht.T), invSt)
-        
-        print('St')
-        print(St)
-        print('inv St')
-        print(invSt)
-        print('Kt')
-        print(Kt)
-
-        sum_dx += np.matmul(Kt, (z-z_pred))
-        sum_dp += np.matmul(Kt, Ht)
-
-    print(P_pred)
-    print(sum_dx)
-    print(sum_dp)
-
-    x_pose = x_pred + sum_dx
-    P_pose = np.matmul(np.eye(3) - sum_dp, P_pred)
-
-    print(x_pose)
-    print(P_pose)
-    
-    draw_map()
+    draw_map(robot)
 
 
     

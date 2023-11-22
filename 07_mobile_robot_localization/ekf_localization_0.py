@@ -45,9 +45,9 @@ class Robot:
         vt += np.random.randn()*0.1
         wt += np.random.randn()*0.1
 
-        x  = robot.x[0,0]
-        y  = robot.x[1,0]
-        ha = robot.x[2,0]   # heading angle        
+        x  = self.x[0,0]
+        y  = self.x[1,0]
+        ha = self.x[2,0]   # heading angle        
         
         xp = x - vt/wt*np.sin(ha) + vt/wt*np.sin(ha+wt*dt)
         yp = y + vt/wt*np.cos(ha) - vt/wt*np.cos(ha+wt*dt)
@@ -66,11 +66,11 @@ class Robot:
                        [0,     sy**2, 0],
                        [0,     0,     sha**2]])
         
-        P_pose = robot.P
+        P_pose = self.P
         P_pred = np.matmul(np.matmul(Gt, P_pose), Gt.T) + Rt
 
-        robot.x_pred = x_pred
-        robot.P_pred = P_pred
+        self.x_pred = x_pred
+        self.P_pred = P_pred
 
     def update(self):
         # measurement update

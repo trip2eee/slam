@@ -68,7 +68,7 @@ def motion_model_velocity(xt, ut, xt_1, dt=1/10):
     pw = prob(w-w_hat, alpha[2]*abs(v) + alpha[3]*abs(w))
     pg = prob(gamma_hat, alpha[4]*abs(v) + alpha[5]*abs(w))
 
-    return pv, pw, pg
+    return (pv * pw * pg)
 
 def sample_normal_distribution(b):
     """ Table 5.4 Algorithm for sampling from normal distribution with zero mean and variance b.
@@ -142,7 +142,7 @@ ha1 = robot.ha
 
 xt = np.array([x1, y1, ha1])
 
-pv, pw, pgamma = motion_model_velocity(xt, ut, xt_1, dt=delta_t)
+pxut = motion_model_velocity(xt, ut, xt_1, dt=delta_t)
 
 samples = []
 for s in range(500):

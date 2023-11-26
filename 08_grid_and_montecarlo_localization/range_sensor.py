@@ -10,8 +10,8 @@ class RangeSensor:
         # z_hit, z_short, z_max, and z_rand in p.128, equation 6.13        
         w_hit   = 0.97
         w_short = 0.005
-        w_max   = 0.015
-        w_rand  = 0.01
+        w_max   = 0.020
+        w_rand  = 0.005
 
         # normalize
         w_sum = w_hit + w_short + w_max + w_rand

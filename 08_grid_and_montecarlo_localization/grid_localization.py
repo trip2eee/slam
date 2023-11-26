@@ -23,7 +23,7 @@ grid_map = cv2.imread('./grid_map0.png')
 map = grid_map[:,:,0]
 pdf = np.zeros([h_map, w_map])
 
-robot = Robot()
+robot = Robot(map)
 
 for t in range(30):
 
@@ -33,10 +33,19 @@ for t in range(30):
     robot.predict(ut)
     robot.update()
     
-    robot.measure(map)
+    robot.measure(robot.x, map)
+
+    p_xy = robot.pk_pred.sum(axis=2)
+
+    grid_map_disp = grid_map.copy()
+
+    
+    grid_map_disp[:,:,0] = (p_xy * 255).astype(np.uint8)
+    grid_map_disp[:,:,1] = (1 - p_xy) * grid_map[:,:,1]
+    grid_map_disp[:,:,2] = (1 - p_xy) * grid_map[:,:,2]
 
     fig = plt.figure()
-    plt.imshow(grid_map)
+    plt.imshow(grid_map_disp)
     robot.plot()
 
     plt.gca().invert_yaxis()

@@ -74,7 +74,7 @@ class RangeSensor:
         for xi in range(len(self.pdf)):
             x = xi * res
             p_hit = self.compute_p_hit(x, z)
-            eta_p_hit += p_hit
+            eta_p_hit += p_hit*res
         
         for xi in range(len(self.pdf)):
             x = xi * res

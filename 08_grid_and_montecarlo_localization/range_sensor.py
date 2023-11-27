@@ -8,10 +8,15 @@ class RangeSensor:
         self.z_max = 5  # 5m
 
         # z_hit, z_short, z_max, and z_rand in p.128, equation 6.13        
-        w_hit   = 0.97
-        w_short = 0.005
+        # w_hit   = 0.97
+        # w_short = 0.005
+        # w_max   = 0.020
+        # w_rand  = 0.005
+
+        w_hit   = 0.50
+        w_short = 0.135
         w_max   = 0.020
-        w_rand  = 0.005
+        w_rand  = 0.145
 
         # normalize
         w_sum = w_hit + w_short + w_max + w_rand
@@ -70,11 +75,11 @@ class RangeSensor:
         w_max = self.w_max
         w_rand = self.w_rand
 
-        eta_p_hit = 0
+        eta_p_hit = 1.0 # assume to be always 1.0
         for xi in range(len(self.pdf)):
             x = xi * res
             p_hit = self.compute_p_hit(x, z)
-            eta_p_hit += p_hit
+            # eta_p_hit += p_hit*res
         
         for xi in range(len(self.pdf)):
             x = xi * res
@@ -86,6 +91,25 @@ class RangeSensor:
             self.pdf[xi] = p_hit*w_hit + p_short*w_short + p_max*w_max + p_rand*w_rand
 
         return self.pdf
+
+    def compute_px(self, z, z_true):
+        """compute p(z | z*)
+           z* : true value
+        """
+        w_hit = self.w_hit
+        w_short = self.w_short
+        w_max = self.w_max
+        w_rand = self.w_rand
+
+        eta_p_hit = 1.0 # assume to be always 1.0
+        p_hit = self.compute_p_hit(z, z_true) / eta_p_hit
+        p_short = self.compute_p_short(z, z_true)
+        p_max = self.compute_p_max(z)
+        p_rand = self.compute_p_rand(z)
+
+        p = p_hit*w_hit + p_short*w_short + p_max*w_max + p_rand*w_rand
+        
+        return p
 
     def measure(self):
         sum_pdf = self.pdf.sum()

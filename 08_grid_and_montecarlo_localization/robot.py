@@ -17,27 +17,19 @@ max_sensor_range = 5
 dt = 0.1
 alpha = [0.2, 0.1, 0.2, 0.2, 0.1, 0.1]
 
-class Robot:
-    def __init__(self, map):
+pixel_obstacle = 200
 
-        x_pose = np.array([[20*res_x, 30*res_y, 0]], dtype=np.float32).T
-        P_pose = np.array([[3**2, 0, 0], 
-                           [0, 3**2, 0],
-                           [0, 0, 1**2]], dtype=np.float32)
+class Robot:
+    def __init__(self, map, x_pose):        
 
         self.x = x_pose
-        self.P = P_pose
-
-        self.x_pred = x_pose.copy()
-        self.P_pred = P_pose.copy()
-
         self.x_gt = x_pose.copy()
 
         self.range_sensor = RangeSensor()
         self.range_sensor.z_max = max_sensor_range
     
         self.sensor_angles = [
-            0, 15, 30, 45, 60, 75, 90, -15, -30, -45, -60, -75, -90
+            0, 15, 30, 45, 60, 75, 90, 360-15, 360-30, 360-45, 360-60, 360-75, 360-90
         ]
         num_angles = len(self.sensor_angles)
         self.sensor_ranges = [0] * num_angles
@@ -162,11 +154,11 @@ class Robot:
 
                     # print('{}{}{}'.format(i,j,d))
                     # if not wall
-                    if self.map[i,j] >= 200:
+                    if self.map[i,j] >= pixel_obstacle:
 
                         xt = [j*res_x, i*res_y, d*res_theta*np.pi/180.0]
 
-                        n = 2
+                        n = 3
                         ni0 = i-n
                         ni1 = i+n
 
@@ -197,19 +189,23 @@ class Robot:
         t_end = time.time()
         print('predict() - ellapsed time: {:.3f}'.format(t_end - t_start))
 
+    def reset_obstacle_lut(self):
+        self.obstacles = []
+
     def make_obstacle_lut(self, map):
         if len(self.obstacles) == 0:
             for i in range(map.shape[0]):
                 for j in range(map.shape[1]):
-                    if map[i,j] < 1:
+                    if map[i,j] < pixel_obstacle:
                         # add (x, y) of obstacles
                         self.obstacles.append([j, i])
             self.obstacles = np.array(self.obstacles, dtype=np.float32)
-            self.obstacles[:,0] *= res_x
-            self.obstacles[:,1] *= res_y
+            if len(self.obstacles) > 0:
+                self.obstacles[:,0] *= res_x
+                self.obstacles[:,1] *= res_y
 
     
-    def measure(self, xt, map):
+    def measure(self, xt, map, noise=True):
         x     = xt[0,0]
         y     = xt[1,0]
         theta = xt[2,0]
@@ -218,12 +214,13 @@ class Robot:
         z_true = self.predict_measure(xt, map)
         for idx_angle in range(len(self.sensor_angles)):
 
-            self.range_sensor.compute_pdf(z_true[idx_angle])
-            # draw a noisy measure
-            self.sensor_ranges[idx_angle] = self.range_sensor.measure()
+            if noise:
+                self.range_sensor.compute_pdf(z_true[idx_angle])
+                # draw a noisy measure
+                self.sensor_ranges[idx_angle] = self.range_sensor.measure()
+            else:
+                self.sensor_ranges[idx_angle] = z_true[idx_angle]
 
-            # self.sensor_ranges[idx_angle] = z_true[idx_angle]
-        
         return self.sensor_ranges
 
     def predict_measure(self, xt, map):
@@ -232,59 +229,48 @@ class Robot:
         theta = xt[2,0]
         self.make_obstacle_lut(map)
 
-        dx = self.obstacles[:,0] - x
-        dy = self.obstacles[:,1] - y
-        r2 = dx**2 + dy**2
-        idx_valid = np.where(r2 <= max_sensor_range**2)
+        if len(self.obstacles) > 0:
+            dx = self.obstacles[:,0] - x
+            dy = self.obstacles[:,1] - y
+            r2 = dx**2 + dy**2
+            idx_valid = np.where(r2 <= max_sensor_range**2)
 
-        dx = dx[idx_valid]
-        dy = dy[idx_valid]
+            dx = dx[idx_valid]
+            dy = dy[idx_valid]
 
-        # range of arctan2: [-pi, pi]
-        angle_valid = np.arctan2(dy, dx)
+            # range of arctan2: [-pi, pi]
+            angle_valid = np.arctan2(dy, dx)
+            idx_neg = np.where(angle_valid < 0.0)
+            angle_valid[idx_neg] += np.pi*2.0
 
-        angle_thres = 5*np.pi/180.0
-        # self.sensor_angles = [
-        #     0, 15, 30, 45, 60, 75, 90, -15, -30, -45, -60, -75, -90
-        # ]
+            # angle_valid = np.arctan2(dy, dx) - theta
 
-        for idx_angle in range(len(self.sensor_angles)):
-            angle = self.sensor_angles[idx_angle]
-            beam_angle = angle*np.pi/180.0 + theta
-            
-            if beam_angle > np.pi:
-                # if 190 deg -> -170 deg
-                beam_angle = (beam_angle - 2.0*np.pi)
-            
-            min_dist2 = max_sensor_range**2
+            angle_thres = 5*np.pi/180.0
 
-            diff_angles = abs(beam_angle - angle_valid)
-            idx_valid = np.where(diff_angles <= angle_thres)
-
-            dx_beam = dx[idx_valid]
-            dy_beam = dy[idx_valid]
-
-            r2 = dx_beam**2 + dy_beam**2
-            if len(r2) > 0:
-                min_dist2 = r2.min()
-            else:
+            for idx_angle in range(len(self.sensor_angles)):
+                angle = self.sensor_angles[idx_angle]
+                beam_angle = angle*np.pi/180.0 + theta
+                # beam_angle = angle*np.pi/180.0
+                                
                 min_dist2 = max_sensor_range**2
-            
 
-            # for pos in self.obstacles[idx_valid]:
-            #     mx, my = pos
+                diff_angles = abs(beam_angle - angle_valid)
+                idx_valid = np.where((diff_angles <= angle_thres) | ((diff_angles >= np.pi*2-angle_thres) & (diff_angles <= np.pi*2+angle_thres)))
 
-            #     dx = mx - x
-            #     dy = my - y
-            #     meas_angle = np.arctan2(dy, dx)
+                dx_beam = dx[idx_valid]
+                dy_beam = dy[idx_valid]
 
-            #     if abs(beam_angle - meas_angle) <= angle_thres:
-            #         r2 = dx**2 + dy**2
-            #         if min_dist2 > r2:
-            #             min_dist2 = r2
-            
-            r = np.sqrt(min_dist2)
-            self.true_ranges[idx_angle] = r
+                r2 = dx_beam**2 + dy_beam**2
+                if len(r2) > 0:
+                    min_dist2 = r2.min()
+                else:
+                    min_dist2 = max_sensor_range**2
+                
+                r = np.sqrt(min_dist2)
+                self.true_ranges[idx_angle] = r
+        else:
+            for idx_angle in range(len(self.sensor_angles)):
+                self.true_ranges[idx_angle] = max_sensor_range
         
         return self.true_ranges
 
@@ -292,13 +278,6 @@ class Robot:
         # measurement update
 
         z_meas = self.measure(self.x_gt, self.map)
-
-        # z_pred = self.predict_measure(self.x_gt, self.map)
-        # N = len(self.sensor_angles)
-        # q = 1.0
-        # for k in range(N):
-        #     p = self.range_sensor.compute_px(z_meas[k], z_pred[k])
-        #     q *= p
 
         for i in range(self.h_map):
             for j in range(self.w_map):

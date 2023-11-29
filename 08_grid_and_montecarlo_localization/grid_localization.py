@@ -22,7 +22,8 @@ grid_map = cv2.imread('./grid_map0.png')
 map = grid_map[:,:,0]
 pdf = np.zeros([h_map, w_map])
 
-robot = Robot(map)
+x_pose = np.array([[20*res_x, 30*res_y, 0]], dtype=np.float32).T
+robot = Robot(map, x_pose)
 
 for t in range(30):
 

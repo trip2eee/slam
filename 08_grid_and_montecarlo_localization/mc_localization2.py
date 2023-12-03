@@ -1,5 +1,5 @@
-"""Monte Carlo Localization
-   Table 8.2 on page 200.
+"""Augmented Monte Carlo Localization
+   Table 8.3 on page 206.
 """
 import cv2
 import numpy as np
@@ -20,14 +20,14 @@ alpha = [4, 2, 4, 4, 4, 2]
 def sample_normal_distribution(b):
    """ Table 5.4 Algorithm for sampling from normal distribution with zero mean and variance b.
    """
-   r = np.random.random_integers(-1000, 1000, size=12) * 0.001
+   r = np.random.randint(-1000, 1000, size=12) * 0.001
    return b/6.0*r.sum()
 
 def sample_triangular_distribution(b):
    """ Table 5.4 Algorithm for sampling from triangular distribution with zero mean and variance b.
    """
-   r1 = np.random.random_integers(-1000, 1000) * 0.001
-   r2 = np.random.random_integers(-1000, 1000) * 0.001
+   r1 = np.random.randint(-1000, 1000) * 0.001
+   r2 = np.random.randint(-1000, 1000) * 0.001
    return b * r1 * r2
 
 sample = sample_normal_distribution
@@ -39,6 +39,12 @@ class MCLocalization:
       self.M = 500 # The number of particles
       self.X = np.zeros([self.M, 3])  # particles
       self.w = np.ones(self.M) / self.M # Weight (importance)
+      self.w_avg = 0
+      self.w_slow = 0
+      self.w_fast = 0
+      self.a_slow = 0.001
+      self.a_fast = 0.9
+
       self.map = map
       self.obstacles = []
    
@@ -134,8 +140,6 @@ class MCLocalization:
          idx_neg = np.where(angle_valid < 0.0)
          angle_valid[idx_neg] += np.pi*2.0
 
-         # angle_valid = np.arctan2(dy, dx) - theta
-
          angle_thres = 5*np.pi/180.0
 
          for idx_angle in range(N):
@@ -160,13 +164,13 @@ class MCLocalization:
             r = np.sqrt(min_dist2)
             if noise:
                r += np.random.randn()*0.15
-
+            
             sensor_ranges[idx_angle] = r
       else:
-         for idx_angle in range(N):
+        for idx_angle in range(N):
             if noise:
-               r = min(max_sensor_range, max_sensor_range+np.random.randn()*0.15)
-            sensor_ranges[idx_angle] = max_sensor_range
+              r = min(max_sensor_range, max_sensor_range+np.random.randn()*0.15)
+            sensor_ranges[idx_angle] = r
       
       return sensor_ranges
    
@@ -219,18 +223,19 @@ class MCLocalization:
             self.X[m,2] = a
 
    def sample(self, ut, dt=0.1):
-       
       self.x_gt, p_gt = self.sample_motion_model_velocity(mcl.x_gt, ut, noise=False, dt=dt)
       self.sensor_ranges = self.measure(self.x_gt)
+
+      self.w_avg = 0
+
       # for each particle
       for m in range(self.M):
-
          # motion model
          self.X[m], pm = self.sample_motion_model_velocity(self.X[m], ut, noise=True, dt=dt)
 
          # measurement model
-         ranges = self.measure(self.X[m])
-      
+         ranges = self.measure(self.X[m], noise=True)
+
          N = len(self.sensor_angles)
          q = 1.0
          for k in range(N):
@@ -238,6 +243,10 @@ class MCLocalization:
             q *= p
 
          self.w[m] = q*pm
+         self.w_avg += self.w[m] / self.M
+
+      self.w_slow = self.w_slow + self.a_slow*(self.w_avg - self.w_slow)
+      self.w_fast = self.w_fast + self.a_fast*(self.w_avg - self.w_fast)
 
    def resample(self):
       Xt = []
@@ -250,13 +259,41 @@ class MCLocalization:
       c = self.w[0]
       i = 0
 
+      p_random = max(0.0, 1 - self.w_fast / self.w_slow)
+      print('p_random: {:.2f} {}, {}'.format(p_random, self.w_fast, self.w_slow))
+
       for m in range(self.M):
-         U = r + (m / M)   # m: 0 ~ M-1
-         while U > c:
-            i = i + 1
-            c = c + self.w[i]
-         Xt.append(self.X[i])
-         Wt.append(self.w[i])
+         p = np.random.rand()
+         if p <= p_random:
+            # generate random samples
+            x = np.random.rand() * max_x
+            y = np.random.rand() * max_y
+
+            u_map = int(x/res_x + 0.5)
+            v_map = int(y/res_y + 0.5)
+
+            while u_map >= self.map.shape[1] or v_map >= self.map.shape[0] or self.map[v_map, u_map] < 255:
+               x = np.random.rand() * max_x
+               y = np.random.rand() * max_y
+
+               u_map = int(x/res_x + 0.5)
+               v_map = int(y/res_y + 0.5)
+
+            # a = np.random.randint(0, 2) * 180 * np.pi / 180.0
+            a = np.random.rand()*np.pi*2.0
+            self.X[m,0] = x
+            self.X[m,1] = y
+            self.X[m,2] = a
+            Xt.append([x,y,a])
+            Wt.append(1.0/self.M)
+         else:
+
+            U = r + (m / M)   # m: 0 ~ M-1
+            while U > c:
+               i = i + 1
+               c = c + self.w[i]
+            Xt.append(self.X[i])
+            Wt.append(self.w[i])
 
       self.X = np.array(Xt)
       self.w = np.array(Wt)
@@ -318,7 +355,7 @@ if __name__ == '__main__':
    plt.waitforbuttonpress(0)
    plt.close(fig)
 
-   for t in range(30):
+   for t in range(100):
       fig = plt.figure()
       plt.imshow(map)
       vt = 1.5

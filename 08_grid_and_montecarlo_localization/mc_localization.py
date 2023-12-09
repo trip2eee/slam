@@ -1,5 +1,5 @@
 """Monte Carlo Localization
-   Table 8.2 on page 200.
+   Table 8.2 on page 252.
 """
 import cv2
 import numpy as np

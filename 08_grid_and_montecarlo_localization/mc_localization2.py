@@ -1,5 +1,5 @@
 """Augmented Monte Carlo Localization
-   Table 8.3 on page 206.
+   Table 8.3 on page 258.
 """
 import cv2
 import numpy as np

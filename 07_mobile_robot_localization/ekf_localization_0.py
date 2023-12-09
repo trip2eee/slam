@@ -1,5 +1,5 @@
 """Algorithm EKF_localization_known_correspondences
-   Table 7.2, p.169
+   Table 7.2, p.204
 """
 
 import numpy as np
@@ -42,8 +42,13 @@ class Robot:
         self.x_gt[2,0] = ha_gt + wt*dt
 
         # motion update (prediction)
-        vt += np.random.randn()*0.1
-        wt += np.random.randn()*0.1
+        
+        a1 = 0.001
+        a2 = 0.0
+        a3 = 0.0
+        a4 = 0.001
+        vt += np.random.randn()*(np.sqrt(a1)*vt)
+        wt += np.random.randn()*(np.sqrt(a4)*wt)
 
         x  = self.x[0,0]
         y  = self.x[1,0]
@@ -54,20 +59,29 @@ class Robot:
         hap = ha + wt*dt
         x_pred = np.array([[xp], [yp], [hap]])
 
-        Gt = np.array([[1, 0, vt/wt*np.cos(ha) - vt/wt*np.cos(ha+wt*dt)],
-                       [0, 1, vt/wt*np.sin(ha) - vt/wt*np.sin(ha+wt*dt)],
+        # dx/dx, dx/dy, dx/da
+        # dy/dx, dy/dy, dy/da
+        #     0,     0,      1
+        Gt = np.array([[1, 0, -vt/wt*np.cos(ha) + vt/wt*np.cos(ha+wt*dt)],
+                       [0, 1, -vt/wt*np.sin(ha) + vt/wt*np.sin(ha+wt*dt)],
                        [0, 0, 1]])
 
-        # process noise covariance
-        sx  = 0.1
-        sy  = 0.1
-        sha = 0.02
-        Rt = np.array([[sx**2, 0,     0],
-                       [0,     sy**2, 0],
-                       [0,     0,     sha**2]])
+        # dx/dv, dx/dw
+        # dy/dv, dy/dw
+        # da/dv, da/dw
+        Vt = np.array([
+            [(-np.sin(ha)+np.sin(ha+wt*dt))/wt, vt*(np.sin(ha)-np.sin(ha+wt*dt))/wt**2 + vt*np.cos(ha+wt*dt)*dt/wt],
+            [(np.cos(ha)-np.cos(ha+wt*dt))/wt, -vt*(np.cos(ha)-np.cos(ha+wt*dt))/wt**2 + vt*np.sin(ha+wt*dt)*dt/wt],
+            [0.0, dt]
+        ])
+
+        Mt = np.array([
+            [a1*vt**2+a2*wt**2, 0],
+            [0, a2*vt**2+a3*wt**2]
+        ])
         
         P_pose = self.P
-        P_pred = np.matmul(np.matmul(Gt, P_pose), Gt.T) + Rt
+        P_pred = np.matmul(np.matmul(Gt, P_pose), Gt.T) + np.matmul(np.matmul(Vt,Mt),Vt.T)
 
         self.x_pred = x_pred
         self.P_pred = P_pred
@@ -77,8 +91,6 @@ class Robot:
         x_pred = self.x_pred
         P_pred = self.P_pred        
 
-        sum_dx = np.zeros([3,1], dtype=np.float32)
-        sum_dp = np.zeros([3,3], dtype=np.float32)
         for i in range(len(landmarks)):
             j = i
             mx, my, ms = landmarks[j]
@@ -108,9 +120,9 @@ class Robot:
                 [ms],
             ])
 
-            Ht = 1/q*np.array([
-                [np.sqrt(q)*dx, -np.sqrt(q)*dy,  0],
-                [           dy,             dx, -1],
+            Ht = np.array([
+                [dx/np.sqrt(q), -dy/np.sqrt(q),  0],
+                [         dy/q,           dx/q, -1],
                 [            0,              0,  0],
             ])
 
@@ -121,19 +133,12 @@ class Robot:
             Kt = np.matmul(np.matmul(P_pred, Ht.T), invSt)
             KHt = np.matmul(Kt, Ht)
 
-            # weight
-            N = len(landmarks)
-            w = 1.0/N
+            x_pred = x_pred + np.matmul(Kt, (z-z_pred))
+            I = np.eye(3)
+            P_pred = np.matmul(I - KHt, P_pred)
 
-            sum_dx += w*np.matmul(Kt, (z-z_pred))
-
-            # the diagonal term of KHt shall be less than 1 to make covariances positive.
-            sum_dp += w*KHt
-
-        self.x = x_pred + sum_dx
-        I = np.eye(3)
-        self.P = np.matmul(I - sum_dp, P_pred)
-
+        self.x = x_pred
+        self.P = P_pred
 
 res_map = 0.1   # m/pixel
 w_world = 10    # m

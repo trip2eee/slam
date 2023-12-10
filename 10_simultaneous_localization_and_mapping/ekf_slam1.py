@@ -206,11 +206,12 @@ class EKF_SLAM:
 
             if self.P[j,j] < INFINITE:
                 self.draw_cov_ellipse(self.x[j:j+3], self.P[j:j+3,j:j+3], color='r')
+                plt.scatter(self.x[j], self.x[j+1], color='r')
 
         # draw robot
         self.draw_robot(self.x_gt, color='g')
         self.draw_robot(self.x_pred, color='c')
-        self.draw_robot(self.x, color='b')        
+        self.draw_robot(self.x, color='b')
         
         self.draw_cov_ellipse(self.x, self.P[:2,:2], color='b')
 
@@ -256,7 +257,7 @@ ekf_slam = EKF_SLAM()
 
 tm = 3  # time multiplier
 
-for t in range(25*tm):
+for t in range(21*tm):
     fig = plt.figure('map')
 
     print('time:',t)

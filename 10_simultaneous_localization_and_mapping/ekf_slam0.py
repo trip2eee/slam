@@ -54,8 +54,8 @@ class EKF_SLAM:
         self.x_gt[:3] += dx # update ground truth
 
 
-        # vt += np.random.randn()*0.001
-        # wt += np.random.randn()*0.0001
+        vt += np.random.randn()*0.3
+        wt += np.random.randn()*0.3
         dx = np.array([
             [-vt/wt*np.sin(theta) + vt/wt*np.sin(theta + wt*dt)],
             [ vt/wt*np.cos(theta) - vt/wt*np.cos(theta + wt*dt)],
@@ -187,6 +187,7 @@ class EKF_SLAM:
 
         # draw robot
         self.draw_robot(self.x_gt, color='g')
+        self.draw_robot(self.x_pred, color='c')
         self.draw_robot(self.x, color='b')
         
         self.draw_cov_ellipse(self.x, self.P[:2,:2], color='b')

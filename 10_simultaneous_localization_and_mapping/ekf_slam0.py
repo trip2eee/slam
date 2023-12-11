@@ -85,9 +85,9 @@ class EKF_SLAM:
 
     def measure(self, mi):
         mx, my, ms = mi
-        x = self.x_pred[0,0]
-        y = self.x_pred[1,0]
-        theta = self.x_pred[2,0]
+        x = self.x_gt[0,0]
+        y = self.x_gt[1,0]
+        theta = self.x_gt[2,0]
 
         dx = mx - x
         dy = my - y
@@ -233,7 +233,7 @@ class EKF_SLAM:
 ekf_slam = EKF_SLAM()
 
 
-for t in range(25):
+for t in range(21):
     fig = plt.figure('map')
 
     print('time:',t)

@@ -8,13 +8,13 @@ import matplotlib.pyplot as plt
 
 landmarks = [
     [ 5, 10, 0],
-    [10, 10, 1],
-    [15, 10, 2],
-    [20, 10, 3],
-    [20,  0, 4],
-    [15,  0, 5],
-    [10,  0, 6],
-    [ 5,  0, 7],
+    [10, 10, 0],
+    [15, 10, 0],
+    [20, 10, 0],
+    [20,  0, 0],
+    [15,  0, 0],
+    [10,  0, 0],
+    [ 5,  0, 0],
 ]
 landmarks = np.array(landmarks, dtype=np.float32)
 landmarks[:,1] -= 11.0
@@ -24,68 +24,139 @@ c = [ci for ci in range(M)] # correspondence matrix
 
 INFINITE = 100**2
     
-tm = 3  # time multiplier
+tm = 1  # time multiplier
 dt = 0.1/tm
+
+r_max = 6.0 # maximum detection range
 
 class GraphSLAM:
     def __init__(self):
-        self.x = []
-        self.x_gt = []
-        self.u = []
+        # ground truth pose
+        self.x_gt = [
+            [0, 0, 0]
+        ]
+        self.x = [
+            [0, 0, 0]
+        ]
 
-    def initialize(self, u):
+        self.u_gt = []  # controls (ground truth)
+        self.u = []     # controls (with noise)
+        self.z = [      # measurements
+            []
+        ]
+
+        self.tau = []
+        
+    def control(self, ut):
+        vt, wt = ut
+        self.u_gt.append([vt, wt])
+        
+        # compute ground truth pose
+        x0 = self.x_gt[-1][0]
+        y0 = self.x_gt[-1][1]
+        theta0 = self.x_gt[-1][2]
+
+        x_gt = x0 + -vt/wt*np.sin(theta0) + vt/wt*np.sin(theta0 + wt*dt)
+        y_gt = y0 + vt/wt*np.cos(theta0) - vt/wt*np.cos(theta0 + wt*dt)
+        theta_gt = theta0 + wt*dt
+        self.x_gt.append([x_gt, y_gt, theta_gt])
+        
+        # compute accumulated pose with noisy control
+        vt += np.random.randn()*0.3
+        wt += np.random.randn()*0.3
+
+        x0 = self.x[-1][0]
+        y0 = self.x[-1][1]
+        theta0 = self.x[-1][2]
+
+        x = x0 + -vt/wt*np.sin(theta0) + vt/wt*np.sin(theta0 + wt*dt)
+        y = y0 + vt/wt*np.cos(theta0) - vt/wt*np.cos(theta0 + wt*dt)
+        theta = theta0 + wt*dt
+        self.x.append([x, y, theta])
+
+        zt = []
+        for i in range(M):
+            zi = self.measure(landmarks[i], x_gt, y_gt, theta_gt)
+            zt.append(zi)
+        self.z.append(zt)
+
+        # noisy control signal
+        self.u.append([vt, wt])
+    
+    def measure(self, mi, x, y, theta):
+        """ This method measures landmark at pose (x, y, theta)
+            mi: landmark
+        """
+        mx, my, ms = mi
+        
+        dx = mx - x
+        dy = my - y
+        r = np.sqrt(dx**2 + dy**2)
+        phi = np.arctan2(dy, dx) - theta
+        s = ms
+
+        r += np.random.randn()*0.1
+        phi += np.random.randn()*0.001
+
+        # maximum detection range: 6m
+        if r <= r_max:
+            # valid sensing
+            return np.array([[r, phi, s]], dtype=np.float32).T
+        else:
+            # invalid sensing
+            return np.array([[r_max + 0.1, phi, s]], dtype=np.float32).T
+
+    def initialize(self):
         """ This method initializes mean pose vectors (Table 11.1)
             u: u_1:t
         """
-        T = len(u)
+        
+        self.x_gt = np.array(self.x_gt)
+        self.x = np.array(self.x)
 
-        self.x = np.zeros([T+1, 3], dtype=np.float32)
-        self.x_gt = np.zeros([T+1, 3], dtype=np.float32)
+        self.u = np.array(self.u)
 
-        self.x[0,:] = [0, 0, 0]
-        self.x_gt[0,:] = [0, 0, 0]
+        # T = len(self.u)
+        # self.x = np.zeros([T+1, 3], dtype=np.float32)
 
-        for t in range(T):
-            ut = u[t]
-            vt, wt = ut
+        # self.x[0,:] = [0, 0, 0]
+        # self.x_gt[0,:] = [0, 0, 0]
 
-            # Generate ground truth.
-            theta0 = self.x_gt[t,2]
-            self.x_gt[t+1,0] = self.x_gt[t,0] + -vt/wt*np.sin(theta0) + vt/wt*np.sin(theta0 + wt*dt)
-            self.x_gt[t+1,1] = self.x_gt[t,1] + vt/wt*np.cos(theta0) - vt/wt*np.cos(theta0 + wt*dt)
-            self.x_gt[t+1,2] = self.x_gt[t,2] + wt*dt
-            
+        # for t in range(T):
+        #     ut = self.u[t]
+        #     vt, wt = ut
 
-            # initial poses with noise in control
-            vt += np.random.randn()*0.3
-            wt += np.random.randn()*0.3
-            self.u.append([vt, wt])     # add noisy control
+        #     theta0 = self.x[t,2]
+        #     self.x[t+1,0] = self.x[t,0] + -vt/wt*np.sin(theta0) + vt/wt*np.sin(theta0 + wt*dt)
+        #     self.x[t+1,1] = self.x[t,1] + vt/wt*np.cos(theta0) - vt/wt*np.cos(theta0 + wt*dt)
+        #     self.x[t+1,2] = self.x[t,2] + wt*dt
 
-            theta0 = self.x[t,2]
-            self.x[t+1,0] = self.x[t,0] + -vt/wt*np.sin(theta0) + vt/wt*np.sin(theta0 + wt*dt)
-            self.x[t+1,1] = self.x[t,1] + vt/wt*np.cos(theta0) - vt/wt*np.cos(theta0 + wt*dt)
-            self.x[t+1,2] = self.x[t,2] + wt*dt
+        # map
+        self.m = np.zeros([M, 3], dtype=np.float32)
+        m_cnt = np.zeros([M])
 
-    # def measure(self, mi, t):
-    #     mx, my, ms = mi
-    #     x = self.x_pred[0,0]
-    #     y = self.x_pred[1,0]
-    #     theta = self.x_pred[2,0]
+        for t in range(len(self.z)):
 
-    #     dx = mx - x
-    #     dy = my - y
-    #     r = np.sqrt(dx**2 + dy**2)
-    #     phi = np.arctan2(dy, dx) - theta
-    #     s = ms
+            zt = self.z[t]
+            x, y, theta = self.x[t]
+            for i in range(len(zt)):
+                zi = zt[i]
+                r, phi, s = zi
 
-    #     r += np.random.randn()*0.1
-    #     phi += np.random.randn()*0.001
+                if r <= r_max:
+                    phi += theta
+                    mx = r*np.cos(phi) + x
+                    my = r*np.sin(phi) + y
 
-    #     if r <= 6:
-    #         return np.array([[r, phi, s]], dtype=np.float32).T
-    #     else:
-    #         return None
-         
+                    if abs(self.m[i,0]) < 1e-6 and abs(self.m[i,1]) < 1e-6:
+                        self.m[i,0] += mx
+                        self.m[i,1] += my
+                        self.m[i,2] += s
+                        m_cnt[i] += 1
+
+        for i in range(M):
+            self.m[i] /= m_cnt[i]
+
     def linearize(self):
         """ This method calculates O and xi (Table 11.2).
         """
@@ -97,7 +168,7 @@ class GraphSLAM:
 
         self.O[0:3, 0:3] += INFINITE    # line 3
 
-        T = len(u)  # the number of controls
+        T = len(self.u)  # the number of controls
         for t in range(1, T+1):
             x0 = self.x[t-1].reshape(3,1)
 
@@ -149,6 +220,8 @@ class GraphSLAM:
 
         # for all measurements zt (line 10)
         for t in range(0, T+1):
+            zt = self.z[t]
+
             s_r = 1.0
             s_phi = 0.1
             s_s = 0.1
@@ -164,28 +237,22 @@ class GraphSLAM:
             theta = self.x[t,2]
 
             # for all observed features z^i_t = (r^i_t, phi^i_t, s^i_t)
-            for i in range(M):
-                j = c[i]
-                mx, my, ms = landmarks[j]
+            for i in range(len(zt)):
+                # measurement i corresponds to landmark j.
+                j = i
+                zi = zt[j]
+                if zi[0,0] > r_max:
+                    continue
 
-                dx = mx - x
-                dy = my - y
+                m_jx, m_jy, m_js = self.m[j]
+                dx = m_jx - x
+                dy = m_jy - y
                 q = dx**2 + dy**2
 
-                # if the feature is out of sensor range, skip
-                if q > 6.0:
-                    continue
-                
-                zi = np.array([
-                    [np.sqrt(q)],
-                    [np.arctan2(dy,dx) - theta],
-                    [ms]
-                ])
-                
                 zi_pred = np.array([
                     [np.sqrt(q)],
                     [np.arctan2(dy,dx) - theta],
-                    [ms]
+                    [m_js]
                 ])
 
                 # dr/dx,   dr/dy,   dr/dtheta,   dr/dmx_j,   dr/dmy_j,   dr/dms_j
@@ -199,24 +266,36 @@ class GraphSLAM:
 
                 # Information at xt and mj
                 O_tj = np.matmul(np.matmul(Hi.T, invQ), Hi)
+                # Omega at xt and mj
+                #     x0 x1 x2 m0 m1
+                #  x0  x
+                #  x1     x
+                #  x2        x    xx
+                #  m0
+                #  m1
+                
+                # 6x6 matrix
+                # O_xt O_xm
+                # O_mx O_mj
+                # As described on page 351, chop matrix and vector; add to O and xi.
+                self.O[t*3:t*3+3, t*3:t*3+3] += O_tj[:3,:3]
+                self.O[n*3+j*3:n*3+j*3+3, n*3+j*3:n*3+j*3+3] += O_tj[3:,3:]
 
-                a = np.array([[x, y, theta, mx, my, ms]]).T
-                xi_tj = np.matmul(Hi.T, invQ)
+                self.O[t*3:t*3+3, n*3+j*3:n*3+j*3+3] += O_tj[:3,3:]
+                self.O[n*3+j*3:n*3+j*3+3, t*3:t*3+3] += O_tj[3:,:3]
 
+                a = np.array([[x, y, theta, m_jx, m_jy, m_js]]).T
+                delta = zi - zi_pred + np.matmul(Hi, a)
+                xi_tj = np.matmul(np.matmul(Hi.T, invQ), delta)
 
-
-
-
-
-
-            
-
+                self.xi[t*3:t*3+3] = xi_tj[:3]
+                self.xi[n*3+j*3:n*3+j*3+3] = xi_tj[3:]
 
     
     def reduce(self, O, xi):
         """ This method reduces the size of the information.
         """
-        pass
+        
 
     def solve(self, O_pose, xi_pose, O, xi):
         """ This method updates the posterior x(mu) (Table 11.4).
@@ -229,9 +308,25 @@ class GraphSLAM:
         plt.plot(self.x_gt[:,0], self.x_gt[:,1], c='g')
         plt.plot(self.x[:,0], self.x[:,1], c='r')
 
+        plt.scatter(self.m[:,0], self.m[:,1], c='r')
+
+        # for t in range(len(self.z)):
+        #     zt = self.z[t]
+        #     x, y, theta = self.x[t]
+        #     for zi in zt:
+        #         r, phi, s = zi
+
+        #         if r <= 6:
+        #             phi += theta
+        #             mx = r*np.cos(phi) + x
+        #             my = r*np.sin(phi) + y
+
+        #             plt.scatter(mx, my, c='r')
+
 if __name__ == '__main__':
 
-    u = []
+    slam = GraphSLAM()
+
     for t in range(21*tm):
 
         # Robot maneuver
@@ -250,10 +345,9 @@ if __name__ == '__main__':
         else:
             ut = [25, 0.001]
         
-        u.append(ut)
+        slam.control(ut)
     
-    slam = GraphSLAM()
-    slam.initialize(u)
+    slam.initialize()
 
     # repeat    
     slam.linearize()

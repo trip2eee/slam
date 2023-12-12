@@ -41,11 +41,15 @@ class GraphSLAM:
 
         self.u_gt = []  # controls (ground truth)
         self.u = []     # controls (with noise)
+        
+        # tau(j) : set of poses xt at which j was observed.
         self.z = [      # measurements
             []
         ]
 
         self.tau = []
+        for i in range(M):
+            self.tau.append([])
         
     def control(self, ut):
         vt, wt = ut
@@ -73,11 +77,17 @@ class GraphSLAM:
         y = y0 + vt/wt*np.cos(theta0) - vt/wt*np.cos(theta0 + wt*dt)
         theta = theta0 + wt*dt
         self.x.append([x, y, theta])
-
+        
         zt = []
         for i in range(M):
             zi = self.measure(landmarks[i], x_gt, y_gt, theta_gt)
             zt.append(zi)
+
+            # if the measurement is valid
+            if zi[0,0] <= r_max:
+                j = i
+                self.tau[j].append(len(self.x) - 1)
+            
         self.z.append(zt)
 
         # noisy control signal
@@ -160,7 +170,7 @@ class GraphSLAM:
     def linearize(self):
         """ This method calculates O and xi (Table 11.2).
         """
-        n = len(self.x)+1 # the number of poses (number of controls + initial pose).
+        n = len(self.x) # the number of poses
         
         # initialize information matrix and information vector to 0 (line 2)
         self.O = np.zeros([n*3+M*3, n*3+M*3], dtype=np.float32)     # information matrix (Omega)
@@ -264,6 +274,7 @@ class GraphSLAM:
                     [             0,              0,  0,             0,             0, q],  # 1/q*q = 1
                 ])
 
+                # line 18
                 # Information at xt and mj
                 O_tj = np.matmul(np.matmul(Hi.T, invQ), Hi)
                 # Omega at xt and mj
@@ -277,30 +288,77 @@ class GraphSLAM:
                 # 6x6 matrix
                 # O_xt O_xm
                 # O_mx O_mj
-                # As described on page 351, chop matrix and vector; add to O and xi.
+                # As described on page 351, chop matrix and vector; add to O and xi.                
                 self.O[t*3:t*3+3, t*3:t*3+3] += O_tj[:3,:3]
                 self.O[n*3+j*3:n*3+j*3+3, n*3+j*3:n*3+j*3+3] += O_tj[3:,3:]
 
                 self.O[t*3:t*3+3, n*3+j*3:n*3+j*3+3] += O_tj[:3,3:]
                 self.O[n*3+j*3:n*3+j*3+3, t*3:t*3+3] += O_tj[3:,:3]
 
+                # line 19
                 a = np.array([[x, y, theta, m_jx, m_jy, m_js]]).T
                 delta = zi - zi_pred + np.matmul(Hi, a)
                 xi_tj = np.matmul(np.matmul(Hi.T, invQ), delta)
-
-                self.xi[t*3:t*3+3] = xi_tj[:3]
-                self.xi[n*3+j*3:n*3+j*3+3] = xi_tj[3:]
+                
+                self.xi[t*3:t*3+3] += xi_tj[:3]
+                self.xi[n*3+j*3:n*3+j*3+3] += xi_tj[3:]
 
     
-    def reduce(self, O, xi):
-        """ This method reduces the size of the information.
+    def reduce(self):
+        """ This method reduces the size of the information (Table 11.3).
         """
-        
+        n = len(self.x) # the number of poses
+        self.O_red = self.O.copy()     # line 2, reduced information matrix
+        self.xi_red = self.xi.copy()   # line 3, reduced information vector
 
-    def solve(self, O_pose, xi_pose, O, xi):
+        # for each feature j
+        for j in range(M):
+            # subtract ~O_tau(j)j*O^-1_jj from ~xi at x_tau(j) and m_j
+            for k in self.tau[j]:
+                # k: tau(j)
+
+                O_kj = self.O_red[3*k:3*k+3, 3*j:3*j+3]
+                O_jk = self.O_red[3*j:3*j+3, 3*k:3*k+3]
+
+                O_jj = self.O_red[3*j:3*j+3, 3*j:3*j+3]
+                xi_j = self.xi_red[3*n+3*j:3*n+3*j+3]
+
+                invO_jj = np.linalg.inv(O_jj)
+
+                xi_kj = np.matmul(np.matmul(O_kj, invO_jj), xi_j)
+
+                self.xi_red[3*k:3*k+3] -= xi_kj
+                self.xi_red[3*n+3*j:3*n+3*j+3] -= xi_kj
+
+                O_kj = np.matmul(np.matmul(O_kj, invO_jj), O_jk)
+                self.O_red[3*k:3*k+3, 3*k:3*k+3] -= O_kj
+                self.O_red[3*n+3*j:3*n+3*j+3, 3*n+3*j:3*n+3*j+3] -= O_kj
+
+        self.O_red = self.O_red[:3*n, :3*n]
+        self.xi_red = self.xi_red[:3*n,:]
+
+    def solve(self):
         """ This method updates the posterior x(mu) (Table 11.4).
         """
-        pass
+        n = len(self.x) # the number of poses
+
+        self.S = np.linalg.inv(self.O_red)
+        self.x = np.matmul(self.S, self.xi_red)
+        self.x = self.x.reshape([-1, 3])
+
+        # for each feature j
+        # for j in range(M):
+        #     for k in self.tau[j]:
+        #         O_jj = self.O[3*n+3*j:3*n+3*j+3, 3*n+3*j:3*n+3*j+3]
+        #         O_jk = self.O[3*n+3*j:3*n+3*j+3, 3*k:3*k+3]
+        #         m_k = self.m[3*k:3*k+3]
+        #         xi_j = self.xi[3*n+3*j:3*n+3*j+3]
+
+        #         invO_jj = np.linalg.inv(O_jj)
+                
+
+        #         self.m[3*j:3*j+3] = np.matmul(np.matmul(invO_jj), xi_j + np.matmul(O_jk, m_k))
+
 
     def plot(self):
         plt.scatter(landmarks[:,0], landmarks[:,1], c='k')
@@ -349,9 +407,6 @@ if __name__ == '__main__':
     
     slam.initialize()
 
-    # repeat    
-    slam.linearize()
-
     fig = plt.figure('map')
     
     slam.plot()
@@ -359,5 +414,20 @@ if __name__ == '__main__':
     plt.draw()
     plt.waitforbuttonpress(0)
     plt.close(fig)
+
+
+    # repeat
+    for i in range(3):
+        slam.linearize()
+        slam.reduce()
+        slam.solve()
+
+        fig = plt.figure('map')
+        
+        slam.plot()
+
+        plt.draw()
+        plt.waitforbuttonpress(0)
+        plt.close(fig)
 
 

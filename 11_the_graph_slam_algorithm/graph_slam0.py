@@ -9,12 +9,12 @@ import matplotlib.pyplot as plt
 landmarks = [
     [ 5, 10, 0],
     [10, 10, 0],
-    # [15, 10, 0],
-    # [20, 10, 0],
-    # [20,  0, 0],
-    # [15,  0, 0],
-    # [10,  0, 0],
-    # [ 5,  0, 0],
+    [15, 10, 0],
+    [20, 10, 0],
+    [20,  0, 0],
+    [15,  0, 0],
+    [10,  0, 0],
+    [ 5,  0, 0],
 ]
 landmarks = np.array(landmarks, dtype=np.float32)
 landmarks[:,1] -= 11.0
@@ -22,7 +22,7 @@ landmarks[:,1] -= 11.0
 M = len(landmarks)          # the number of measurements
 c = [ci for ci in range(M)] # correspondence matrix
 
-INFINITE = 100**2
+INFINITE = 1000**2
     
 tm = 1  # time multiplier
 dt = 0.1/tm
@@ -30,7 +30,7 @@ dt = 0.1/tm
 r_max = 6.0 # maximum detection range
 
 DIM_POSE = 3
-DIM_MEAS = 3
+DIM_MEAS = 2
 
 class GraphSLAM:
     def __init__(self):
@@ -43,7 +43,9 @@ class GraphSLAM:
         ]
 
         self.u_gt = []  # controls (ground truth)
-        self.u = []     # controls (with noise)
+        self.u = [
+            [0,0,0]
+        ]     # controls (with noise)
         
         # tau(j) : set of poses xt at which j was observed.
         self.z = [      # measurements
@@ -118,18 +120,26 @@ class GraphSLAM:
         dy = my - y
         r = np.sqrt(dx**2 + dy**2)
         phi = np.arctan2(dy, dx) - theta
+
+        
+        if phi > np.pi:
+            phi -= 2*np.pi
+        elif phi < -np.pi:
+            phi += 2*np.pi
+
         s = ms
 
         # r += np.random.randn()*0.1
         # phi += np.random.randn()*0.001
 
+        
         # maximum detection range: 6m
         if r <= r_max:
             # valid sensing
-            return np.array([[r, phi, s]], dtype=np.float32).T
+            return np.array([[r, phi]], dtype=np.float32).T
         else:
             # invalid sensing
-            return np.array([[r_max + 0.1, phi, s]], dtype=np.float32).T
+            return np.array([[r_max + 0.1, phi]], dtype=np.float32).T
 
     def initialize(self):
         """ This method initializes mean pose vectors (Table 11.1)
@@ -150,17 +160,19 @@ class GraphSLAM:
             x, y, theta = self.x[t]
             for i in range(len(zt)):
                 zi = zt[i]
-                r, phi, s = zi
+
+                r = zi[0,0]
+                phi = zi[1,0]
 
                 if r <= r_max:
-                    phi += theta
-                    mx = r*np.cos(phi) + x
-                    my = r*np.sin(phi) + y
+
+                    mx = r*np.cos(phi + theta) + x
+                    my = r*np.sin(phi + theta) + y
 
                     if abs(self.m[i,0]) < 1e-6 and abs(self.m[i,1]) < 1e-6:
                         self.m[i,0] += mx
                         self.m[i,1] += my
-                        self.m[i,2] += s
+                        # self.m[i,2] += s
                         m_cnt[i] += 1
 
         for i in range(M):
@@ -178,12 +190,12 @@ class GraphSLAM:
         self.O[0:DIM_POSE, 0:DIM_POSE] += np.eye(DIM_POSE, DIM_POSE) * INFINITE    # line 3
 
         T = len(self.u)  # the number of controls
-        for t in range(1, T+1):
+        for t in range(1, T):
             x0 = self.x[t-1].reshape(DIM_POSE,1)
 
             theta0 = x0[2,0]
 
-            ut = self.u[t-1]
+            ut = self.u[t]
             vt, wt = ut
 
             dx = np.array([
@@ -221,24 +233,33 @@ class GraphSLAM:
             I3 = np.eye(DIM_POSE, DIM_POSE)
             A = np.hstack([-Gt, I3])
             O_t = np.matmul(np.matmul(A.T, invRt), A)
-            self.O[(t-1)*DIM_POSE:(t+1)*DIM_POSE, (t-1)*DIM_POSE:(t+1)*DIM_POSE] += O_t
+
+            idx_t = (t-1)*DIM_POSE
+
+            self.O[idx_t:idx_t+2*DIM_POSE, idx_t:idx_t+2*DIM_POSE] += O_t
 
             # line 8
             xi_t = np.matmul(np.matmul(A.T, invRt), xt - np.matmul(Gt, x0))
-            self.xi[(t-1)*DIM_POSE:(t+1)*DIM_POSE, :] += xi_t
+            self.xi[idx_t:idx_t+2*DIM_POSE, :] += xi_t
 
         # for all measurements zt (line 10)
-        for t in range(0, T+1):
+        for t in range(0, T):
             zt = self.z[t]
 
             s_r = 1.0
-            s_phi = 0.1
+            s_phi = 1.0
             s_s = 0.1
+            # Q = np.array([
+            #     [s_r**2, 0, 0],
+            #     [0, s_phi**2, 0],
+            #     [0, 0, s_s**2],
+            # ], dtype=np.float32)
+
             Q = np.array([
-                [s_r**2, 0, 0],
-                [0, s_phi**2, 0],
-                [0, 0, s_s**2],
+                [s_r**2, 0],
+                [0, s_phi**2],
             ], dtype=np.float32)
+
             invQ = np.linalg.inv(Q)
 
             x = self.x[t,0]
@@ -253,24 +274,37 @@ class GraphSLAM:
                 if zi[0,0] > r_max:
                     continue
 
-                m_jx, m_jy, m_js = self.m[j]
+                # m_jx, m_jy, m_js = self.m[j]
+                m_jx, m_jy = self.m[j]
                 dx = m_jx - x
                 dy = m_jy - y
                 q = dx**2 + dy**2
 
+                phi_pred = np.arctan2(dy,dx) - theta
+                if phi_pred > np.pi:
+                    phi_pred -= 2*np.pi
+                elif phi_pred < -np.pi:
+                    phi_pred += 2*np.pi
+
                 zi_pred = np.array([
                     [np.sqrt(q)],
-                    [np.arctan2(dy,dx) - theta],
-                    [m_js]
+                    [phi_pred],
+                    # [m_js]
                 ])
 
+
+                # print('x, theta:', theta)
+                # if j == 7:
+                print('z_{}, theta:'.format(j), zi[1,0])
+                print('z_{}_pred, theta:'.format(j), zi_pred[1,0])
+                
                 # dr/dx,   dr/dy,   dr/dtheta,   dr/dmx_j,   dr/dmy_j,   dr/dms_j
                 # dphi/dx, dphi/dy, dphi/dtheta, dphi/dmx_j, dphi/dmy_j, dphi/dms_j
                 # ds/dx,   ds/dy,   ds/dtheta,   ds/dmx_j,   ds/dmy_j,   ds/dms_j
                 Hi = 1/q*np.array([
-                    [-np.sqrt(q)*dx, -np.sqrt(q)*dy,  0, np.sqrt(q)*dx, np.sqrt(q)*dy, 0],
-                    [            dy,            -dx, -q,           -dy,            dx, 0],
-                    [             0,              0,  0,             0,             0, q],  # 1/q*q = 1
+                    [-np.sqrt(q)*dx, -np.sqrt(q)*dy,  0, np.sqrt(q)*dx, np.sqrt(q)*dy],
+                    [            dy,            -dx, -q,           -dy,            dx],
+                    # [             0,              0,  0,             0,             0, q],  # 1/q*q = 1
                 ])
 
                 # line 18
@@ -308,7 +342,7 @@ class GraphSLAM:
                                 
 
                 # line 19
-                a = np.array([[x, y, theta, m_jx, m_jy, m_js]]).T
+                a = np.array([[x, y, theta, m_jx, m_jy]]).T
                 delta = zi - zi_pred + np.matmul(Hi, a)
                 xi_tj = np.matmul(np.matmul(Hi.T, invQ), delta)
                 
@@ -339,25 +373,28 @@ class GraphSLAM:
                 for k in self.tau[j]:
                     # k: tau(j)
 
-                    O_kj = self.O_red[k*DIM_POSE:(k+1)*DIM_POSE, n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS]
-                    O_jk = self.O_red[n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS, k*DIM_POSE:(k+1)*DIM_POSE]
+                    idx_k = k*DIM_POSE
+                    idx_j = n*DIM_POSE + j*DIM_MEAS
 
-                    O_jj = self.O_red[n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS, n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS]
+                    O_kj = self.O_red[idx_k:idx_k+DIM_POSE, idx_j:idx_j+DIM_MEAS]
+                    O_jk = self.O_red[idx_j:idx_j+DIM_MEAS, idx_k:idx_k+DIM_POSE]
+
+                    O_jj = self.O_red[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
                     
-                    xi_j = self.xi_red[n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS]
+                    xi_j = self.xi_red[idx_j:idx_j+DIM_MEAS]
 
                     invO_jj = np.linalg.inv(O_jj)
 
                     xi_kj = np.matmul(np.matmul(O_kj, invO_jj), xi_j)
 
-                    self.xi_red[k*DIM_POSE:(k+1)*DIM_POSE] -= xi_kj
-                    self.xi_red[n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS] -= xi_kj
+                    self.xi_red[idx_k:idx_k+DIM_POSE] -= xi_kj
+                    self.xi_red[idx_j:idx_j+DIM_MEAS] -= xi_kj
                     # xi_res[k*DIM_POSE:(k+1)*DIM_POSE] -= xi_kj
                     # xi_res[n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS] -= xi_kj
 
                     O_kjk = np.matmul(np.matmul(O_kj, invO_jj), O_jk)
-                    self.O_red[k*DIM_POSE:(k+1)*DIM_POSE, k*DIM_POSE:(k+1)*DIM_POSE] -= O_kjk
-                    self.O_red[n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS, n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS] -= O_kjk
+                    self.O_red[idx_k:idx_k+DIM_POSE, idx_k:idx_k+DIM_POSE] -= O_kjk
+                    self.O_red[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS] -= O_kjk
 
                     # O_res[k*DIM_POSE:(k+1)*DIM_POSE, k*DIM_POSE:(k+1)*DIM_POSE] -= O_kjk
                     # O_res[n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS, n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS] -= O_kjk
@@ -365,8 +402,8 @@ class GraphSLAM:
                 # self.O_red += O_res
                 # self.xi_red += xi_res
 
-        # self.O_red = self.O_red[:n*DIM_POSE, :n*DIM_POSE]
-        # self.xi_red = self.xi_red[:n*DIM_POSE,:]
+            self.O_red = self.O_red[:n*DIM_POSE, :n*DIM_POSE]
+            self.xi_red = self.xi_red[:n*DIM_POSE,:]
 
     def solve(self):
         """ This method updates the posterior x(mu) (Table 11.4).
@@ -375,7 +412,9 @@ class GraphSLAM:
 
         self.S = np.linalg.inv(self.O_red)
         self.x = np.matmul(self.S, self.xi_red)
-        self.x = self.x.reshape([-1, DIM_POSE])
+
+        # self.x = self.x.reshape([-1, DIM_POSE])
+        self.x = self.x[:n*DIM_POSE].reshape([-1, DIM_POSE])
 
         # for each feature j
         # for j in range(M):
@@ -399,6 +438,7 @@ class GraphSLAM:
 
         plt.scatter(self.m[:,0], self.m[:,1], c='r')
 
+        plt.axis('equal')
         # for t in range(len(self.z)):
         #     zt = self.z[t]
         #     x, y, theta = self.x[t]
@@ -417,7 +457,7 @@ if __name__ == '__main__':
     slam = GraphSLAM()
 
     # for t in range(21*tm):
-    for t in range(5*tm):
+    for t in range(18*tm):
 
         # Robot maneuver
         if t <= 7*tm:
@@ -436,6 +476,16 @@ if __name__ == '__main__':
             ut = [25, 0.001]
         
         slam.control(ut)
+
+    # for t in range(12*tm):
+
+    #     # Robot maneuver
+    #     if t <= 3*tm:
+    #         ut = [25, 0.001]
+    #     else:
+    #         ut = [25, -np.pi/100]
+                
+        # slam.control(ut)
     
     slam.initialize()
 

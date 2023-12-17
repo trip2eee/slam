@@ -96,6 +96,7 @@ class GraphSLAM:
         self.x.append([x, y, theta])
         
         zt = []
+        cur_t = len(self.x) - 1
         for i in range(M):
             zi = self.measure(landmarks[i], x_gt, y_gt, theta_gt)
             zt.append(zi)
@@ -103,7 +104,9 @@ class GraphSLAM:
             # if the measurement is valid
             if zi[0,0] <= r_max:
                 j = i
-                self.tau[j].append(len(self.x) - 1)
+                self.tau[j].append(cur_t)
+
+                print('t {} measured {}'.format(cur_t, j))
             
         self.z.append(zt)
 
@@ -139,7 +142,7 @@ class GraphSLAM:
             return np.array([[r, phi]], dtype=np.float32).T
         else:
             # invalid sensing
-            return np.array([[r_max + 0.1, phi]], dtype=np.float32).T
+            return np.array([[r_max + 1.0, phi]], dtype=np.float32).T
 
     def initialize(self):
         """ This method initializes mean pose vectors (Table 11.1)
@@ -295,9 +298,9 @@ class GraphSLAM:
 
                 # print('x, theta:', theta)
                 # if j == 7:
-                print('z_{}, theta:'.format(j), zi[1,0])
-                print('z_{}_pred, theta:'.format(j), zi_pred[1,0])
-                
+                # print('z_{}, theta:'.format(j), zi[1,0])
+                # print('z_{}_pred, theta:'.format(j), zi_pred[1,0])
+
                 # dr/dx,   dr/dy,   dr/dtheta,   dr/dmx_j,   dr/dmy_j,   dr/dms_j
                 # dphi/dx, dphi/dy, dphi/dtheta, dphi/dmx_j, dphi/dmy_j, dphi/dms_j
                 # ds/dx,   ds/dy,   ds/dtheta,   ds/dmx_j,   ds/dmy_j,   ds/dms_j
@@ -361,55 +364,88 @@ class GraphSLAM:
         n = len(self.x) # the number of poses
         self.O_red = self.O.copy()     # line 2, reduced information matrix
         self.xi_red = self.xi.copy()   # line 3, reduced information vector
-                
+
         # for each feature j
-        if False:
-            for j in range(M):
-                # subtract ~O_tau(j)j*O^-1_jj from ~xi at x_tau(j) and m_j
+        for j in range(M):
+            # subtract ~O_tau(j)j*O^-1_jj from ~xi at x_tau(j) and m_j
 
-                O_res = np.zeros(self.O_red.shape)
-                xi_res = np.zeros(self.xi_red.shape)
+            idx_j = n*DIM_POSE + j*DIM_MEAS
+            # 2x2
+            O_jj = self.O_red[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
+            # 2x2
+            invO_jj = np.linalg.inv(O_jj)
+            # 2x1
+            xi_j = self.xi_red[idx_j:idx_j+DIM_MEAS]
 
-                for k in self.tau[j]:
-                    # k: tau(j)
+            n_tau = len(self.tau[j])
+            # 3k x 2
+            O_kj = np.zeros([DIM_POSE*n_tau, DIM_MEAS], dtype=np.float32)
+            # 2 x 3k
+            O_jk = np.zeros([DIM_MEAS, DIM_POSE*n_tau], dtype=np.float32)
+            
+            # for each pose tau(j)
+            idx_row = 0
+            for k in self.tau[j]:
 
-                    idx_k = k*DIM_POSE
-                    idx_j = n*DIM_POSE + j*DIM_MEAS
+                # tau(j) = {1, 2}
+                # xi: [xi_1
+                #      xi_2
+                #      xi_j]
+                
+                # O: [O_11,     , O_1j, 
+                #         , O_22, O_2j]
+                #     O_j1, O_j2, O_jj
 
-                    O_kj = self.O_red[idx_k:idx_k+DIM_POSE, idx_j:idx_j+DIM_MEAS]
-                    O_jk = self.O_red[idx_j:idx_j+DIM_MEAS, idx_k:idx_k+DIM_POSE]
+                # O_kk = O_kk - O_kj * (O_jj)^-1 * O_jk
+                # xi_k = xi_k - O_kj * (O_jj)^-1 * xi_j
 
-                    O_jj = self.O_red[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
-                    
-                    xi_j = self.xi_red[idx_j:idx_j+DIM_MEAS]
+                idx_k = k*DIM_POSE
 
-                    invO_jj = np.linalg.inv(O_jj)
+                # 3k x 2
+                O_kj[idx_row:idx_row+DIM_POSE, :] += self.O_red[idx_k:idx_k+DIM_POSE, idx_j:idx_j+DIM_MEAS]
+                # 2 x 3k
+                O_jk[:, idx_row:idx_row+DIM_POSE] += self.O_red[idx_j:idx_j+DIM_MEAS, idx_k:idx_k+DIM_POSE]
 
-                    xi_kj = np.matmul(np.matmul(O_kj, invO_jj), xi_j)
+                idx_row += DIM_POSE
+                
+            
+            # Marginal of pose k: 3x2 * 2x2* 2x1 = 3x1
+            xi_kj = np.matmul(np.matmul(O_kj, invO_jj), xi_j)
 
-                    self.xi_red[idx_k:idx_k+DIM_POSE] -= xi_kj
-                    self.xi_red[idx_j:idx_j+DIM_MEAS] -= xi_kj
-                    # xi_res[k*DIM_POSE:(k+1)*DIM_POSE] -= xi_kj
-                    # xi_res[n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS] -= xi_kj
+            # Marginal of pose k: 3x2 * 2x2 * 2x3 = 3x3
+            O_kk = np.matmul(np.matmul(O_kj, invO_jj), O_jk)
+            
 
-                    O_kjk = np.matmul(np.matmul(O_kj, invO_jj), O_jk)
-                    self.O_red[idx_k:idx_k+DIM_POSE, idx_k:idx_k+DIM_POSE] -= O_kjk
-                    self.O_red[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS] -= O_kjk
+            idx_row = 0
+            for k in self.tau[j]:
 
-                    # O_res[k*DIM_POSE:(k+1)*DIM_POSE, k*DIM_POSE:(k+1)*DIM_POSE] -= O_kjk
-                    # O_res[n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS, n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS] -= O_kjk
+                idx_k = k*DIM_POSE
+                self.xi_red[idx_k:idx_k+DIM_POSE] -= xi_kj[idx_row:idx_row+DIM_POSE]
 
-                # self.O_red += O_res
-                # self.xi_red += xi_res
+                idx_col = 0
+                for k2 in self.tau[j]:
+                    idx_k2 = k2*DIM_POSE
 
-            self.O_red = self.O_red[:n*DIM_POSE, :n*DIM_POSE]
-            self.xi_red = self.xi_red[:n*DIM_POSE,:]
+                    self.O_red[idx_k:idx_k+DIM_POSE, idx_k2:idx_k2+DIM_POSE] -= O_kk[idx_row:idx_row+DIM_POSE, idx_col:idx_col+DIM_POSE]
+
+                    idx_col += DIM_POSE
+
+                idx_row += DIM_POSE
+
+            # self.O_red[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS] -= O_kk
+
+            # O_res[k*DIM_POSE:(k+1)*DIM_POSE, k*DIM_POSE:(k+1)*DIM_POSE] -= O_kjk
+            # O_res[n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS, n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS] -= O_kjk
+
+        self.O_red = self.O_red[:n*DIM_POSE, :n*DIM_POSE]
+        self.xi_red = self.xi_red[:n*DIM_POSE,:]
+
 
     def solve(self):
         """ This method updates the posterior x(mu) (Table 11.4).
         """
         n = len(self.x) # the number of poses
-
+    
         self.S = np.linalg.inv(self.O_red)
         self.x = np.matmul(self.S, self.xi_red)
 
@@ -458,6 +494,7 @@ if __name__ == '__main__':
 
     # for t in range(21*tm):
     for t in range(18*tm):
+    # for t in range(5*tm):
 
         # Robot maneuver
         if t <= 7*tm:

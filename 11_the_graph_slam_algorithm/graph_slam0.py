@@ -6,6 +6,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+np.random.seed(123)
 landmarks = [
     [ 5, 10, 0],
     [10, 10, 0],
@@ -27,10 +28,16 @@ INFINITE = 1000**2
 tm = 1  # time multiplier
 dt = 0.1/tm
 
-r_max = 6.0 # maximum detection range
+r_max = 10.0 # maximum detection range
 
 DIM_POSE = 3
 DIM_MEAS = 2
+
+STD_V = 0.2
+STD_W = 0.1
+
+STD_R = 0.2
+STD_PHI = 0.05
 
 class GraphSLAM:
     def __init__(self):
@@ -72,8 +79,8 @@ class GraphSLAM:
         self.x_gt.append([x_gt, y_gt, theta_gt])
         
         # compute accumulated pose with noisy control
-        # vt += np.random.randn()*0.3
-        # wt += np.random.randn()*0.3
+        vt = max(0, vt + np.random.randn()*STD_V)
+        wt += np.random.randn()*STD_W
 
         x0 = self.x[-1][0]
         y0 = self.x[-1][1]
@@ -120,9 +127,8 @@ class GraphSLAM:
 
         s = ms
 
-        # r += np.random.randn()*0.1
-        # phi += np.random.randn()*0.001
-
+        r = max(0, r + np.random.randn()*STD_R)
+        phi += np.random.randn()*STD_PHI
         
         # maximum detection range: 6m
         if r <= r_max:
@@ -206,10 +212,12 @@ class GraphSLAM:
                 [0, 0, 1],
             ])
             
+            s_v = 1.0 + STD_V
+            s_w = 1.0 + STD_W
             Rt = np.array([
-                [0.3**2, 0, 0],
-                [0, 0.3**2, 0],
-                [0, 0, 0.3**2]
+                [s_v**2, 0, 0],
+                [0, s_v**2, 0],
+                [0, 0, s_w**2]
             ], dtype=np.float32)
             invRt = np.linalg.inv(Rt)
             
@@ -237,9 +245,8 @@ class GraphSLAM:
         for t in range(0, T):
             zt = self.z[t]
 
-            s_r = 1.0
-            s_phi = 1.0
-            s_s = 0.1
+            s_r = 1.0 + STD_R
+            s_phi = 1.0 + STD_PHI
             # Q = np.array([
             #     [s_r**2, 0, 0],
             #     [0, s_phi**2, 0],
@@ -424,8 +431,8 @@ class GraphSLAM:
         # self.x = self.x.reshape([-1, DIM_POSE])
         self.x = self.x[:n*DIM_POSE].reshape([-1, DIM_POSE])
 
-        print('solved pose')
-        print(self.x)
+        # print('solved pose')
+        # print(self.x)
 
         # for each feature j
         for j in range(M):
@@ -448,25 +455,16 @@ class GraphSLAM:
                 x_k0  = self.x[k].reshape([DIM_POSE,1])
 
                 O_jk[:, idx_stack:idx_stack+DIM_POSE] += O_jk0
-                x_k[idx_stack:idx_stack+DIM_POSE] += x_k0
+                x_k[idx_stack:idx_stack+DIM_POSE,:] += x_k0
 
                 idx_stack += DIM_POSE
 
-            mj = np.matmul(invO_jj, xi_j + np.matmul(O_jk, x_k))
+            # Please refer to errata: http://probabilistic-robotics.informatik.uni-freiburg.de/corrections/pg361.pdf
+            # '+' -> '-'
+            mj = np.matmul(invO_jj, xi_j - np.matmul(O_jk, x_k))
 
             self.m[j,0] = mj[0,0]
             self.m[j,1] = mj[1,0]
-
-        #     for k in self.tau[j]:
-        #         O_jj = self.O[3*n+3*j:3*n+3*j+3, 3*n+3*j:3*n+3*j+3]
-        #         O_jk = self.O[3*n+3*j:3*n+3*j+3, 3*k:3*k+3]
-        #         m_k = self.m[3*k:3*k+3]
-        #         xi_j = self.xi[3*n+3*j:3*n+3*j+3]
-
-        #         invO_jj = np.linalg.inv(O_jj)
-                
-
-        #         self.m[3*j:3*j+3] = np.matmul(np.matmul(invO_jj), xi_j + np.matmul(O_jk, m_k))
 
 
     def plot(self):
@@ -496,7 +494,7 @@ if __name__ == '__main__':
     slam = GraphSLAM()
 
     # Robot maneuver
-    for t in range(21*tm):        
+    for t in range(21*tm):
         if t <= 7*tm:
             ut = [25, 0.001]
         elif t <= 9*tm:

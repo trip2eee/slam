@@ -44,7 +44,7 @@ class GraphSLAM:
 
         self.u_gt = []  # controls (ground truth)
         self.u = [
-            [0,0,0]
+            [0, 0, 0]
         ]     # controls (with noise)
         
         # tau(j) : set of poses xt at which j was observed.
@@ -69,11 +69,6 @@ class GraphSLAM:
         y_gt = y0 + vt/wt*np.cos(theta0) - vt/wt*np.cos(theta0 + wt*dt)
         theta_gt = theta0 + wt*dt
 
-        if theta_gt > np.pi:
-            theta_gt -= 2*np.pi
-        elif theta_gt < -np.pi:
-            theta_gt += 2*np.pi
-        
         self.x_gt.append([x_gt, y_gt, theta_gt])
         
         # compute accumulated pose with noisy control
@@ -85,13 +80,8 @@ class GraphSLAM:
         theta0 = self.x[-1][2]
 
         x = x0 + -vt/wt*np.sin(theta0) + vt/wt*np.sin(theta0 + wt*dt)
-        y = y0 + vt/wt*np.cos(theta0) - vt/wt*np.cos(theta0 + wt*dt)
+        y = y0 +  vt/wt*np.cos(theta0) - vt/wt*np.cos(theta0 + wt*dt)
         theta = theta0 + wt*dt
-
-        if theta > np.pi:
-            theta -= 2*np.pi
-        elif theta < -np.pi:
-            theta += 2*np.pi
 
         self.x.append([x, y, theta])
         
@@ -106,8 +96,6 @@ class GraphSLAM:
                 j = i
                 self.tau[j].append(cur_t)
 
-                print('t {} measured {}'.format(cur_t, j))
-            
         self.z.append(zt)
 
         # noisy control signal
@@ -124,7 +112,7 @@ class GraphSLAM:
         r = np.sqrt(dx**2 + dy**2)
         phi = np.arctan2(dy, dx) - theta
 
-        
+        # phi shall be [-pi, pi]
         if phi > np.pi:
             phi -= 2*np.pi
         elif phi < -np.pi:
@@ -284,6 +272,8 @@ class GraphSLAM:
                 q = dx**2 + dy**2
 
                 phi_pred = np.arctan2(dy,dx) - theta
+
+                # phi_pred shall be [-pi, pi]
                 if phi_pred > np.pi:
                     phi_pred -= 2*np.pi
                 elif phi_pred < -np.pi:
@@ -294,12 +284,6 @@ class GraphSLAM:
                     [phi_pred],
                     # [m_js]
                 ])
-
-
-                # print('x, theta:', theta)
-                # if j == 7:
-                # print('z_{}, theta:'.format(j), zi[1,0])
-                # print('z_{}_pred, theta:'.format(j), zi_pred[1,0])
 
                 # dr/dx,   dr/dy,   dr/dtheta,   dr/dmx_j,   dr/dmy_j,   dr/dms_j
                 # dphi/dx, dphi/dy, dphi/dtheta, dphi/dmx_j, dphi/dmy_j, dphi/dms_j
@@ -332,16 +316,16 @@ class GraphSLAM:
                 idx_j = n*DIM_POSE + j*DIM_MEAS
                 
                 # A
-                self.O[idx_t:idx_t+DIM_POSE, idx_t:idx_t+DIM_POSE] += O_tj[:3,:3]
+                self.O[idx_t:idx_t+DIM_POSE, idx_t:idx_t+DIM_POSE] += O_tj[:DIM_POSE,:DIM_POSE]
 
                 # B
-                self.O[idx_t:idx_t+DIM_POSE, idx_j:idx_j+DIM_MEAS] += O_tj[:3,3:]
+                self.O[idx_t:idx_t+DIM_POSE, idx_j:idx_j+DIM_MEAS] += O_tj[:DIM_POSE,DIM_POSE:]
 
                 # B^T
-                self.O[idx_j:idx_j+DIM_MEAS, idx_t:idx_t+DIM_POSE] += O_tj[3:,:3]
+                self.O[idx_j:idx_j+DIM_MEAS, idx_t:idx_t+DIM_POSE] += O_tj[DIM_POSE:,:DIM_POSE]
 
                 # C
-                self.O[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS] += O_tj[3:,3:]
+                self.O[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS] += O_tj[DIM_POSE:,DIM_POSE:]
                                 
 
                 # line 19
@@ -349,26 +333,19 @@ class GraphSLAM:
                 delta = zi - zi_pred + np.matmul(Hi, a)
                 xi_tj = np.matmul(np.matmul(Hi.T, invQ), delta)
                 
-                self.xi[idx_t:idx_t+DIM_POSE] += xi_tj[:3]
-                self.xi[idx_j:idx_j+DIM_MEAS] += xi_tj[3:]
+                self.xi[idx_t:idx_t+DIM_POSE] += xi_tj[:DIM_POSE]
+                self.xi[idx_j:idx_j+DIM_MEAS] += xi_tj[DIM_POSE:]
 
     def reduce(self):
         """ This method reduces the size of the information (Table 11.3).
         """
-
-        # O = [ Okk Okj]
-        #     [ Ojk Ojj]
-        # Skk = (~Okk)^-1
-        # ~Okk = Okk - Okj*Ojj^-1*Ojk
-
         n = len(self.x) # the number of poses
         self.O_red = self.O.copy()     # line 2, reduced information matrix
         self.xi_red = self.xi.copy()   # line 3, reduced information vector
 
         # for each feature j
         for j in range(M):
-            # subtract ~O_tau(j)j*O^-1_jj from ~xi at x_tau(j) and m_j
-
+           
             idx_j = n*DIM_POSE + j*DIM_MEAS
             # 2x2
             O_jj = self.O_red[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
@@ -432,11 +409,6 @@ class GraphSLAM:
 
                 idx_row += DIM_POSE
 
-            # self.O_red[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS] -= O_kk
-
-            # O_res[k*DIM_POSE:(k+1)*DIM_POSE, k*DIM_POSE:(k+1)*DIM_POSE] -= O_kjk
-            # O_res[n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS, n*DIM_POSE+j*DIM_MEAS:n*DIM_POSE+(j+1)*DIM_MEAS] -= O_kjk
-
         self.O_red = self.O_red[:n*DIM_POSE, :n*DIM_POSE]
         self.xi_red = self.xi_red[:n*DIM_POSE,:]
 
@@ -452,8 +424,39 @@ class GraphSLAM:
         # self.x = self.x.reshape([-1, DIM_POSE])
         self.x = self.x[:n*DIM_POSE].reshape([-1, DIM_POSE])
 
+        print('solved pose')
+        print(self.x)
+
         # for each feature j
-        # for j in range(M):
+        for j in range(M):
+            idx_j = n*DIM_POSE + j*DIM_MEAS
+
+            O_jj = self.O[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
+            xi_j = self.xi[idx_j:idx_j+DIM_MEAS]
+
+            invO_jj = np.linalg.inv(O_jj)
+
+            n_tau = len(self.tau[j])
+            O_jk = np.zeros([DIM_MEAS, n_tau*DIM_POSE])
+            x_k  = np.zeros([n_tau*DIM_POSE, 1])
+
+            idx_stack = 0
+            for k in self.tau[j]:
+                
+                idx_k = k*DIM_POSE
+                O_jk0 = self.O[idx_j:idx_j+DIM_MEAS, idx_k:idx_k+DIM_POSE]
+                x_k0  = self.x[k].reshape([DIM_POSE,1])
+
+                O_jk[:, idx_stack:idx_stack+DIM_POSE] += O_jk0
+                x_k[idx_stack:idx_stack+DIM_POSE] += x_k0
+
+                idx_stack += DIM_POSE
+
+            mj = np.matmul(invO_jj, xi_j + np.matmul(O_jk, x_k))
+
+            self.m[j,0] = mj[0,0]
+            self.m[j,1] = mj[1,0]
+
         #     for k in self.tau[j]:
         #         O_jj = self.O[3*n+3*j:3*n+3*j+3, 3*n+3*j:3*n+3*j+3]
         #         O_jk = self.O[3*n+3*j:3*n+3*j+3, 3*k:3*k+3]
@@ -492,11 +495,8 @@ if __name__ == '__main__':
 
     slam = GraphSLAM()
 
-    # for t in range(21*tm):
-    for t in range(18*tm):
-    # for t in range(5*tm):
-
-        # Robot maneuver
+    # Robot maneuver
+    for t in range(21*tm):        
         if t <= 7*tm:
             ut = [25, 0.001]
         elif t <= 9*tm:
@@ -514,16 +514,6 @@ if __name__ == '__main__':
         
         slam.control(ut)
 
-    # for t in range(12*tm):
-
-    #     # Robot maneuver
-    #     if t <= 3*tm:
-    #         ut = [25, 0.001]
-    #     else:
-    #         ut = [25, -np.pi/100]
-                
-        # slam.control(ut)
-    
     slam.initialize()
 
     fig = plt.figure('map')

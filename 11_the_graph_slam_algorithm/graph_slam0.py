@@ -51,7 +51,7 @@ class GraphSLAM:
 
         self.u_gt = []  # controls (ground truth)
         self.u = [
-            [0, 0, 0]
+            [0.0, 0.0]
         ]     # controls (with noise)
         
         # tau(j) : set of poses xt at which j was observed.

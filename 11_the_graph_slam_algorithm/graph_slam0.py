@@ -6,7 +6,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-np.random.seed(123)
+# np.random.seed(123)
 landmarks = [
     [ 5, 10, 0],
     [10, 10, 0],
@@ -25,7 +25,7 @@ c = [ci for ci in range(M)] # correspondence matrix
 
 INFINITE = 1000**2
     
-tm = 1  # time multiplier
+tm = 2  # time multiplier
 dt = 0.1/tm
 
 r_max = 10.0 # maximum detection range
@@ -33,11 +33,11 @@ r_max = 10.0 # maximum detection range
 DIM_POSE = 3
 DIM_MEAS = 2
 
-STD_V = 0.2
-STD_W = 0.1
+STD_V = 0.5
+STD_W = 0.2
 
 STD_R = 0.2
-STD_PHI = 0.05
+STD_PHI = 0.2
 
 class GraphSLAM:
     def __init__(self):
@@ -48,6 +48,8 @@ class GraphSLAM:
         self.x = [
             [0, 0, 0]
         ]
+
+        self.S = None   # Sigma 0:t
 
         self.u_gt = []  # controls (ground truth)
         self.u = [
@@ -63,6 +65,8 @@ class GraphSLAM:
         for i in range(M):
             self.tau.append([])
         
+        self.m = None   # landmarks
+
     def control(self, ut):
         vt, wt = ut
         self.u_gt.append([vt, wt])
@@ -127,8 +131,8 @@ class GraphSLAM:
 
         s = ms
 
-        r = max(0, r + np.random.randn()*STD_R)
-        phi += np.random.randn()*STD_PHI
+        r = max(0, r + np.random.randn()*STD_R*dt)
+        phi += np.random.randn()*STD_PHI*dt
         
         # maximum detection range: 6m
         if r <= r_max:
@@ -166,11 +170,10 @@ class GraphSLAM:
                     mx = r*np.cos(phi + theta) + x
                     my = r*np.sin(phi + theta) + y
 
-                    if abs(self.m[i,0]) < 1e-6 and abs(self.m[i,1]) < 1e-6:
-                        self.m[i,0] += mx
-                        self.m[i,1] += my
-                        # self.m[i,2] += s
-                        m_cnt[i] += 1
+                    self.m[i,0] += mx
+                    self.m[i,1] += my
+                    # self.m[i,2] += s
+                    m_cnt[i] += 1
 
         for i in range(M):
             self.m[i] /= m_cnt[i]
@@ -212,12 +215,12 @@ class GraphSLAM:
                 [0, 0, 1],
             ])
             
-            s_v = 1.0 + STD_V
-            s_w = 1.0 + STD_W
+            s_v = 1.0 + STD_V*dt
+            s_w = 1.0 + STD_W*dt
             Rt = np.array([
-                [s_v**2, 0, 0],
-                [0, s_v**2, 0],
-                [0, 0, s_w**2]
+                [s_v**2, 0,      0],
+                [0,      s_v**2, 0],
+                [0,      0,      s_w**2]
             ], dtype=np.float32)
             invRt = np.linalg.inv(Rt)
             
@@ -255,7 +258,7 @@ class GraphSLAM:
 
             Q = np.array([
                 [s_r**2, 0],
-                [0, s_phi**2],
+                [0,      s_phi**2],
             ], dtype=np.float32)
 
             invQ = np.linalg.inv(Q)

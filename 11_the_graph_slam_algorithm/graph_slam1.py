@@ -6,7 +6,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-# np.random.seed(123)
+np.random.seed(123)
 landmarks = [
     [ 5, 10, 0],
     [10, 10, 0],
@@ -186,7 +186,7 @@ class GraphSLAM:
         """ This method calculates O and xi (Table 11.2).
         """
         n = len(self.x) # the number of poses
-        M = self.M
+        M = self.M      # the number of measurements
         
         # initialize information matrix and information vector to 0 (line 2)
         self.O = np.zeros([n*DIM_POSE + M*DIM_MEAS, n*DIM_POSE + M*DIM_MEAS], dtype=np.float32)     # information matrix (Omega)
@@ -282,7 +282,7 @@ class GraphSLAM:
             # for all observed features z^i_t = (r^i_t, phi^i_t, s^i_t)
             for i in range(len(zt)):
                 # measurement i corresponds to landmark j.
-                j = self.c[idx_m]
+                j = self.c[idx_m]   # correspondence
                 idx_m += 1
 
                 zi = zt[i]
@@ -368,7 +368,10 @@ class GraphSLAM:
 
         # for each feature j
         for j in range(M):
-           
+            # if the feature is merged with other feature
+            if self.c[j] != j:
+                continue
+            
             idx_j = n*DIM_POSE + j*DIM_MEAS
             # 2x2
             O_jj = self.O_red[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
@@ -452,6 +455,10 @@ class GraphSLAM:
 
         # for each feature j
         for j in range(M):
+            # if the feature is merged with other feature
+            if self.c[j] != j:
+                continue
+
             idx_j = n*DIM_POSE + j*DIM_MEAS
 
             O_jj = self.O[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
@@ -465,7 +472,7 @@ class GraphSLAM:
 
             idx_stack = 0
             for k in self.tau[j]:
-                
+
                 idx_k = k*DIM_POSE
                 O_jk0 = self.O[idx_j:idx_j+DIM_MEAS, idx_k:idx_k+DIM_POSE]
                 x_k0  = self.x[k].reshape([DIM_POSE,1])
@@ -482,7 +489,7 @@ class GraphSLAM:
             self.m[j,0] = mj[0,0]
             self.m[j,1] = mj[1,0]
 
-    def correspondence_test(self):
+    def correspondence_test(self, j, k):
         """ This method test for correspondences (Table 11.8 on page 364).
             This method returns True of correspondence is changed. Otherwise False is returned.
         """
@@ -491,112 +498,193 @@ class GraphSLAM:
         # mu_[j,k] = O^-1_jk,jk * (xi_jk - O_jk,tau(j,k)*mu_tau(j,k))
 
         n = len(self.x) # the number of poses
-        M = self.M
-        for j in range(M):            
-            tau_j = self.tau[j]
+        tau_j = self.tau[j]                
+
+        # implementation of Table 11.8 on page 364.
+        tau_k = self.tau[k]
+        tau_jk = tau_j + tau_k
+
+        # O_jj = self.O[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
+
+        # line 2                
+        idx_j = n*DIM_POSE + j*DIM_MEAS
+        idx_k = n*DIM_POSE + k*DIM_MEAS
+        O_jj = self.O[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
+        O_kk = self.O[idx_k:idx_k+DIM_MEAS, idx_k:idx_k+DIM_MEAS]
+        O_jk = self.O[idx_j:idx_j+DIM_MEAS, idx_k:idx_k+DIM_MEAS]
+        O_kj = self.O[idx_k:idx_k+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
+
+        O_jk_jk = np.zeros([DIM_MEAS*2, DIM_MEAS*2], dtype=np.float32)
+        
+        O_jk_jk[0:DIM_MEAS, 0:DIM_MEAS] = O_jj
+        O_jk_jk[0:DIM_MEAS, DIM_MEAS:] = O_jk
+        O_jk_jk[DIM_MEAS:, 0:DIM_MEAS] = O_kj   # O_jk = O_kj.T
+        O_jk_jk[DIM_MEAS:, DIM_MEAS:] = O_kk
+
+        # S_tjk_tjk: Sigma_tau(j,k),tau(j,k)
+        dim_tau = len(tau_jk)
+        S_tjk_tjk = np.zeros([dim_tau*DIM_POSE, dim_tau*DIM_POSE], dtype=np.float32)
+
+        for idx_row, t1 in enumerate(tau_jk):
+            for idx_col, t2 in enumerate(tau_jk):
+                idx_t1 = t1*DIM_POSE
+                idx_t2 = t2*DIM_POSE
                 
-            for k in range(j+1, M):
-                
-                # implementation of Table 11.8 on page 364.
-                tau_k = self.tau[k]
-                tau_jk = tau_j + tau_k
+                # S: Sigma_0:t
+                S_12 = self.S[idx_t1:idx_t1+DIM_POSE, idx_t2:idx_t2+DIM_POSE]
+                # make strictly symmetric
+                S_12 = (S_12 + S_12.T)*0.5
+                S_tjk_tjk[idx_row*DIM_POSE:(idx_row+1)*DIM_POSE, idx_col*DIM_POSE:(idx_col+1)*DIM_POSE] = S_12
 
-                # O_jj = self.O[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
+        # O_tjk_jk: Omega_tau(j,k),jk
+        O_tjk_jk = np.zeros([dim_tau*DIM_POSE, DIM_MEAS*2], dtype=np.float32)
+        O_jk_tjk = np.zeros([DIM_MEAS*2, dim_tau*DIM_POSE], dtype=np.float32)
+        
+        for idx_row, t1 in enumerate(tau_jk):
 
-                # line 2                
-                idx_j = n*DIM_POSE + j*DIM_MEAS
-                idx_k = n*DIM_POSE + k*DIM_MEAS
-                O_jj = self.O[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
-                O_kk = self.O[idx_k:idx_k+DIM_MEAS, idx_k:idx_k+DIM_MEAS]
-                O_jk = self.O[idx_j:idx_j+DIM_MEAS, idx_k:idx_k+DIM_MEAS]
-                O_kj = self.O[idx_k:idx_k+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
+            idx_t1 = t1*DIM_POSE
 
-                O_jk_jk = np.zeros([DIM_MEAS*2, DIM_MEAS*2], dtype=np.float32)
-                
-                O_jk_jk[0:DIM_MEAS, 0:DIM_MEAS] = O_jj
-                O_jk_jk[0:DIM_MEAS, DIM_MEAS:] = O_jk
-                O_jk_jk[DIM_MEAS:, 0:DIM_MEAS] = O_kj   # O_jk = O_kj.T
-                O_jk_jk[DIM_MEAS:, DIM_MEAS:] = O_kk
+            O_tjk_jk[idx_row*DIM_POSE:(idx_row+1)*DIM_POSE, 0:DIM_MEAS] = self.O[idx_t1:idx_t1+DIM_POSE, idx_j:idx_j+DIM_MEAS]
+            O_tjk_jk[idx_row*DIM_POSE:(idx_row+1)*DIM_POSE,  DIM_MEAS:] = self.O[idx_t1:idx_t1+DIM_POSE, idx_k:idx_k+DIM_MEAS]
 
-                # S_tjk_tjk: Sigma_tau(j,k),tau(j,k)
-                dim_tau = len(tau_jk)
-                S_tjk_tjk = np.zeros([dim_tau*DIM_POSE, dim_tau*DIM_POSE], dtype=np.float32)
+            O_jk_tjk[0:DIM_MEAS,idx_row*DIM_POSE:(idx_row+1)*DIM_POSE] = self.O[idx_j:idx_j+DIM_MEAS, idx_t1:idx_t1+DIM_POSE]
+            O_jk_tjk[DIM_MEAS: ,idx_row*DIM_POSE:(idx_row+1)*DIM_POSE] = self.O[idx_k:idx_k+DIM_MEAS, idx_t1:idx_t1+DIM_POSE]
 
-                for idx_row, t1 in enumerate(tau_jk):
-                    for idx_col, t2 in enumerate(tau_jk):
-                        idx_t1 = t1*DIM_POSE
-                        idx_t2 = t2*DIM_POSE
+        # print(S_tjk_tjk)
+        # print(O_tjk_jk)
+
+        # O_jk_tjk = O_tjk_jk.T
+
+        # O_jk: O_[j,k]
+        O_jk = O_jk_jk - np.matmul(np.matmul(O_jk_tjk, S_tjk_tjk), O_tjk_jk)
+
+        # print(O_jk)
+
+        # line 3
+        # mu_jk: mu_j,k
+        mu_jk = np.zeros([2*DIM_MEAS, 1], dtype=np.float32)
+        mu_jk[:DIM_MEAS] = self.m[j].reshape([-1,1])
+        mu_jk[DIM_MEAS:] = self.m[k].reshape([-1,1])
+        
+        # xi_[j,k] = O_[j,k] mu_[j,k]
+        # mu_[j,k] = O^-1_jk,jk * (xi_jk - O_jk,tau(j,k)mu_tau(j,k))
+        # xi_jk: 4x1 -> mu_[j,k]: 4x1
+        # O^-1_jk,jk: 4x4
+        # xi_[j,k]: 4x1
+        # xi_jk: xi_[j,k], 4x1
+        xi_jk = np.matmul(O_jk, mu_jk)
+
+        # print(mu_jk)
+
+        # line 4
+        # O_djk: Omega_deltaj,k
+        I = np.array([[ 1,  0],
+                        [ 0,  1],
+                        [-1,  0],
+                        [ 0, -1]])
+        O_djk = np.matmul(np.matmul(I.T, O_jk), I)
+
+        # line 5
+        # xi_djk: xi_deltaj,k, 2x1
+        xi_djk = np.matmul(I.T, xi_jk)
+
+        # line 6
+        invO_djk = np.linalg.inv(O_djk)
+        mu_djk = np.matmul(invO_djk, xi_djk)
+        
+        # line 7
+        det = np.linalg.det(invO_djk)
+        if det > 0:
+            eta = (2*np.pi*det)**-0.5
+            p = eta * np.exp(-0.5 * np.matmul(np.matmul(mu_djk.T, invO_djk), mu_djk))
+        else:
+            p = 0        
+
+        return p
+
+    def graph_slam(self):
+        """ Algorithm GraphSLAM (Table 11.9 on p.365)
+        """
+        self.initialize()
+
+        fig = plt.figure('map')
+        self.plot()
+
+        plt.draw()
+        plt.waitforbuttonpress(0)
+        plt.close(fig)
+
+
+        self.linearize()
+        self.reduce()
+        self.solve()
+        
+        fig = plt.figure('map')
+        self.plot()
+
+        plt.draw()
+        plt.waitforbuttonpress(0)
+        plt.close(fig)
+            
+        # repeat (line 7)
+        while True:
+            pair_found = False
+
+            # for each pair of non-corresponding features mj, mk (line 8)
+            M = self.M
+
+            updated = False
+
+            for j in range(M):
+
+                if self.c[j] != j:
+                    continue
+
+                for k in range(j+1, M):
+                    
+                    if self.c[k] != k:
+                        continue
+
+                    if self.c[j] != self.c[k]:
                         
-                        # S: Sigma_0:t
-                        S_12 = self.S[idx_t1:idx_t1+DIM_POSE, idx_t2:idx_t2+DIM_POSE]
-                        # make strictly symmetric
-                        S_12 = (S_12 + S_12.T)*0.5
-                        S_tjk_tjk[idx_row*DIM_POSE:(idx_row+1)*DIM_POSE, idx_col*DIM_POSE:(idx_col+1)*DIM_POSE] = S_12
+                        p = self.correspondence_test(j, k)  # (line 9)
 
-                # O_tjk_jk: Omega_tau(j,k),jk
-                O_tjk_jk = np.zeros([dim_tau*DIM_POSE, DIM_MEAS*2], dtype=np.float32)
-                O_jk_tjk = np.zeros([DIM_MEAS*2, dim_tau*DIM_POSE], dtype=np.float32)
-                
-                for idx_row, t1 in enumerate(tau_jk):
+                        if 0.5 < p <= 1:
+                            print('pair {}, {}, {}'.format(j, k, p))
 
-                    idx_t1 = t1*DIM_POSE
+                            # p = self.correspondence_test(j, k)  # (line 9)
 
-                    O_tjk_jk[idx_row*DIM_POSE:(idx_row+1)*DIM_POSE, 0:DIM_MEAS] = self.O[idx_t1:idx_t1+DIM_POSE, idx_j:idx_j+DIM_MEAS]
-                    O_tjk_jk[idx_row*DIM_POSE:(idx_row+1)*DIM_POSE,  DIM_MEAS:] = self.O[idx_t1:idx_t1+DIM_POSE, idx_k:idx_k+DIM_MEAS]
+                            print(' -mj: ', self.m[j,:])
+                            print(' -mk: ', self.m[k,:])
 
-                    O_jk_tjk[0:DIM_MEAS,idx_row*DIM_POSE:(idx_row+1)*DIM_POSE] = self.O[idx_j:idx_j+DIM_MEAS, idx_t1:idx_t1+DIM_POSE]
-                    O_jk_tjk[DIM_MEAS: ,idx_row*DIM_POSE:(idx_row+1)*DIM_POSE] = self.O[idx_k:idx_k+DIM_MEAS, idx_t1:idx_t1+DIM_POSE]
+                            pair_found = True
+                            self.c[k] = j   # (line 11)
+                            self.tau[j] += self.tau[k]
+                            self.tau[k] = []
 
-                # print(S_tjk_tjk)
-                # print(O_tjk_jk)
+                            self.linearize()
+                            self.reduce()
+                            self.solve()
 
-                # O_jk_tjk = O_tjk_jk.T
+                            fig = plt.figure('map')
+                            self.plot()
 
-                # O_jk: O_[j,k]
-                O_jk = O_jk_jk - np.matmul(np.matmul(O_jk_tjk, S_tjk_tjk), O_tjk_jk)
+                            plt.draw()
+                            plt.waitforbuttonpress(0)
+                            plt.close(fig)
 
-                # print(O_jk)
+                            updated = True
+                            break
 
-                # line 3
-                # mu_jk: mu_j,k
-                mu_jk = np.zeros([2*DIM_MEAS, 1], dtype=np.float32)
-                mu_jk[:DIM_MEAS] = self.m[j].reshape([-1,1])
-                mu_jk[DIM_MEAS:] = self.m[k].reshape([-1,1])
-                
-                # xi_[j,k] = O_[j,k] mu_[j,k]
-                # mu_[j,k] = O^-1_jk,jk * (xi_jk - O_jk,tau(j,k)mu_tau(j,k))
-                # xi_jk: 4x1 -> mu_[j,k]: 4x1
-                # O^-1_jk,jk: 4x4
-                # xi_[j,k]: 4x1
-                # xi_jk: xi_[j,k], 4x1
-                xi_jk = np.matmul(O_jk, mu_jk)
+                    if updated:
+                        break
 
-                # print(mu_jk)
+                if updated:
+                    break                                      
 
-                # line 4
-                # O_djk: Omega_deltaj,k
-                I = np.array([[ 1,  0],
-                              [ 0,  1],
-                              [-1,  0],
-                              [ 0, -1]])
-                O_djk = np.matmul(np.matmul(I.T, O_jk), I)
-
-                # line 5
-                # xi_djk: xi_deltaj,k, 2x1
-                xi_djk = np.matmul(I.T, xi_jk)
-
-                # line 6
-                invO_djk = np.linalg.inv(O_djk)
-                mu_djk = np.matmul(invO_djk, xi_djk)
-
-                # line 7
-                eta = np.linalg.det(2*np.pi * invO_djk)**-0.5
-                p = eta * np.exp(-0.5 * np.matmul(np.matmul(mu_djk.T, invO_djk), mu_djk))
-
-                print(p)
-                # O_tjk_jk = np.zeros([DIM_MEAS*len(tau_jk), ])
-
-
+            if False == pair_found:
+                break
+            
 
     def plot(self):
         plt.scatter(landmarks[:,0], landmarks[:,1], c='k')
@@ -643,30 +731,6 @@ if __name__ == '__main__':
         
         slam.control(ut)
 
-    slam.initialize()
-    fig = plt.figure('map')
-    slam.plot()
-
-    plt.draw()
-    plt.waitforbuttonpress(0)
-    plt.close(fig)
-
-
-    # repeat
-    for i in range(5):
-        if i > 0:
-            slam.correspondence_test()
-
-        slam.linearize()
-        slam.reduce()
-        slam.solve()
-
-        fig = plt.figure('map')
-        
-        slam.plot()
-
-        plt.draw()
-        plt.waitforbuttonpress(0)
-        plt.close(fig)
+    slam.graph_slam()
 
 

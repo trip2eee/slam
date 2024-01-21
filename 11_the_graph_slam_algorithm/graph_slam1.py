@@ -69,6 +69,8 @@ class GraphSLAM:
         self.c = []     # correspondences
         self.M = 0      # the number of features (unknown in the initial state)
 
+        self.O = None   # information matrix (Omega)
+
     def control(self, ut):
         vt, wt = ut
         self.u_gt.append([vt, wt])
@@ -450,9 +452,6 @@ class GraphSLAM:
         # self.x = self.x.reshape([-1, DIM_POSE])
         self.x = self.x[:n*DIM_POSE].reshape([-1, DIM_POSE])
         
-        # print('solved pose')
-        # print(self.x)
-
         # for each feature j
         for j in range(M):
             # if the feature is merged with other feature
@@ -494,6 +493,20 @@ class GraphSLAM:
             This method returns True of correspondence is changed. Otherwise False is returned.
         """
 
+        # Applying local submap concept.
+        xj = self.m[j,0]
+        yj = self.m[j,1]
+        
+        xk = self.m[k,0]
+        yk = self.m[k,1]
+
+        dx = xj - xk
+        dy = yj - yk
+        r2 = dx**2 + dy**2
+
+        if r2 > 1.0:
+            return 0.0
+        
         # mu_j = O^-1_j,j * (xi_j - O_j,tau(j)*~mu_tau(j))
         # mu_[j,k] = O^-1_jk,jk * (xi_jk - O_jk,tau(j,k)*mu_tau(j,k))
 
@@ -503,8 +516,6 @@ class GraphSLAM:
         # implementation of Table 11.8 on page 364.
         tau_k = self.tau[k]
         tau_jk = tau_j + tau_k
-
-        # O_jj = self.O[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
 
         # line 2                
         idx_j = n*DIM_POSE + j*DIM_MEAS
@@ -627,64 +638,81 @@ class GraphSLAM:
         plt.close(fig)
             
         # repeat (line 7)
-        while True:
+        pair_found = True
+        while pair_found:
             pair_found = False
 
             # for each pair of non-corresponding features mj, mk (line 8)
             M = self.M
 
-            updated = False
-
             for j in range(M):
+                if self.c[j] == j:
 
-                if self.c[j] != j:
-                    continue
+                    for k in range(M):
+                        if j != k and self.c[k] == k:
 
-                for k in range(j+1, M):
-                    
-                    if self.c[k] != k:
-                        continue
+                            if self.c[j] != self.c[k]:
+                                p = self.correspondence_test(j, k)  # (line 9)
 
-                    if self.c[j] != self.c[k]:
-                        
-                        p = self.correspondence_test(j, k)  # (line 9)
+                                if p > 0.5:
+                                    print('pair {}, {}, {}'.format(j, k, p))
 
-                        if 0.5 < p <= 1:
-                            print('pair {}, {}, {}'.format(j, k, p))
+                                    print(' -mj: ', self.m[j,:])
+                                    print(' -mk: ', self.m[k,:])
 
-                            # p = self.correspondence_test(j, k)  # (line 9)
+                                    # p = self.correspondence_test(j, k)  # (line 9)
 
-                            print(' -mj: ', self.m[j,:])
-                            print(' -mk: ', self.m[k,:])
+                                    pair_found = True
 
-                            pair_found = True
-                            self.c[k] = j   # (line 11)
-                            self.tau[j] += self.tau[k]
-                            self.tau[k] = []
+                                    self.c[k] = j   # (line 11)
+                                    self.tau[j] += self.tau[k]
+                                    self.tau[k] = []
 
-                            self.linearize()
-                            self.reduce()
-                            self.solve()
+            self.linearize()
+            self.reduce()
+            self.solve()
 
-                            fig = plt.figure('map')
-                            self.plot()
+            print(' -mj updated: ', self.m[j,:])
 
-                            plt.draw()
-                            plt.waitforbuttonpress(0)
-                            plt.close(fig)
+            fig = plt.figure('map')
+            self.plot()
 
-                            updated = True
-                            break
+            plt.draw()
+            plt.waitforbuttonpress(0)
+            plt.close(fig)
 
-                    if updated:
-                        break
-
-                if updated:
-                    break                                      
-
-            if False == pair_found:
-                break
             
+    def draw_covariance(self, j, n_sig=2):
+        # Draw Covariance
+        if self.O is not None:
+            n = len(self.x)
+            
+            idx_j = n*DIM_POSE + j*DIM_MEAS
+
+            O_jj = self.O[idx_j:idx_j+DIM_MEAS, idx_j:idx_j+DIM_MEAS]
+            mx = self.m[j,0]
+            my = self.m[j,1]
+            
+            if np.linalg.det(O_jj) > 0:
+                Cov_jj = np.linalg.inv(O_jj)
+                # eigenvalue, eigenvector
+                w, v = np.linalg.eig(Cov_jj)
+                theta = np.arctan2(v[1,0], v[0,0])
+
+                x = [0] * 361
+                y = [0] * 361
+
+                cos = np.cos(theta)
+                sin = np.sin(theta)
+
+                for a in range(361):
+                    x0 = w[0] * np.cos(a*np.pi/180) * n_sig
+                    y0 = w[1] * np.sin(a*np.pi/180) * n_sig
+
+                    x[a] = x0*cos - y0*sin + mx
+                    y[a] = x0*sin + y0*cos + my
+
+                plt.plot(x, y, c='c')
 
     def plot(self):
         plt.scatter(landmarks[:,0], landmarks[:,1], c='k')
@@ -692,7 +720,21 @@ class GraphSLAM:
         plt.plot(self.x_gt[:,0], self.x_gt[:,1], c='g')
         plt.plot(self.x[:,0], self.x[:,1], c='r')
 
-        plt.scatter(self.m[:,0], self.m[:,1], c='r')
+        m_landmarks = []
+        for idx_m in range(len(self.m)):
+            if self.c[idx_m] == idx_m:
+                m_landmarks.append(self.m[idx_m])
+        m_landmarks = np.array(m_landmarks)
+
+        plt.scatter(m_landmarks[:,0], m_landmarks[:,1], c='r')
+
+        print('# measurements:', len(self.m))
+        print('# landmarks:', len(m_landmarks))
+
+        self.draw_covariance(j=0)
+        self.draw_covariance(j=1)
+        self.draw_covariance(j=2)
+
 
         plt.axis('equal')
         # for t in range(len(self.z)):

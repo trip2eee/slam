@@ -23,7 +23,7 @@ landmarks[:,1] -= 11.0
 M = len(landmarks)          # the number of measurements
 c = [ci for ci in range(M)] # correspondence matrix
 
-INFINITE = 1000**2
+INFINITE = 100**2
     
 tm = 2  # time multiplier
 dt = 0.1/tm
@@ -33,11 +33,11 @@ r_max = 10.0 # maximum detection range
 DIM_POSE = 3
 DIM_MEAS = 2
 
-STD_V = 0.5
-STD_W = 0.2
+STD_V = 0.3
+STD_W = 0.1
 
-STD_R = 0.2
-STD_PHI = 0.2
+STD_R = 0.02
+STD_PHI = 0.02
 
 class GraphSLAM:
     def __init__(self):
@@ -83,7 +83,7 @@ class GraphSLAM:
         self.x_gt.append([x_gt, y_gt, theta_gt])
         
         # compute accumulated pose with noisy control
-        vt = max(0, vt + np.random.randn()*STD_V)
+        vt += np.random.randn()*STD_V
         wt += np.random.randn()*STD_W
 
         x0 = self.x[-1][0]
@@ -123,6 +123,9 @@ class GraphSLAM:
         r = np.sqrt(dx**2 + dy**2)
         phi = np.arctan2(dy, dx) - theta
 
+        r += np.random.randn()*STD_R
+        phi += np.random.randn()*STD_PHI
+        
         # phi shall be [-pi, pi]
         if phi > np.pi:
             phi -= 2*np.pi
@@ -131,11 +134,8 @@ class GraphSLAM:
 
         s = ms
 
-        r = max(0, r + np.random.randn()*STD_R*dt)
-        phi += np.random.randn()*STD_PHI*dt
-        
         # maximum detection range: 6m
-        if r <= r_max:
+        if 0 < r <= r_max:
             # valid sensing
             return np.array([[r, phi]], dtype=np.float32).T
         else:
@@ -215,8 +215,8 @@ class GraphSLAM:
                 [0, 0, 1],
             ])
             
-            s_v = 1.0 + STD_V*dt
-            s_w = 1.0 + STD_W*dt
+            s_v = STD_V*dt
+            s_w = STD_W*dt
             Rt = np.array([
                 [s_v**2, 0,      0],
                 [0,      s_v**2, 0],
@@ -248,8 +248,8 @@ class GraphSLAM:
         for t in range(0, T):
             zt = self.z[t]
 
-            s_r = 1.0 + STD_R
-            s_phi = 1.0 + STD_PHI
+            s_r = STD_R
+            s_phi = STD_PHI
             # Q = np.array([
             #     [s_r**2, 0, 0],
             #     [0, s_phi**2, 0],
@@ -280,6 +280,7 @@ class GraphSLAM:
                 dx = m_jx - x
                 dy = m_jy - y
                 q = dx**2 + dy**2
+                r = np.sqrt(q)
 
                 phi_pred = np.arctan2(dy,dx) - theta
 
@@ -298,10 +299,9 @@ class GraphSLAM:
                 # dr/dx,   dr/dy,   dr/dtheta,   dr/dmx_j,   dr/dmy_j,   dr/dms_j
                 # dphi/dx, dphi/dy, dphi/dtheta, dphi/dmx_j, dphi/dmy_j, dphi/dms_j
                 # ds/dx,   ds/dy,   ds/dtheta,   ds/dmx_j,   ds/dmy_j,   ds/dms_j
-                Hi = 1/q*np.array([
-                    [-np.sqrt(q)*dx, -np.sqrt(q)*dy,  0, np.sqrt(q)*dx, np.sqrt(q)*dy],
-                    [            dy,            -dx, -q,           -dy,            dx],
-                    # [             0,              0,  0,             0,             0, q],  # 1/q*q = 1
+                Hi = np.array([
+                    [-dx/r, -dy/r,  0,  dx/r, dy/r],
+                    [ dy/q, -dx/q, -1, -dy/q, dx/q],
                 ])
 
                 # line 18
@@ -339,10 +339,10 @@ class GraphSLAM:
                                 
 
                 # line 19
-                a = np.array([[x, y, theta, m_jx, m_jy]]).T
-                delta = zi - zi_pred + np.matmul(Hi, a)
+                mu = np.array([[x, y, theta, m_jx, m_jy]]).T
+                delta = zi - zi_pred + np.matmul(Hi, mu)
                 xi_tj = np.matmul(np.matmul(Hi.T, invQ), delta)
-                
+
                 self.xi[idx_t:idx_t+DIM_POSE] += xi_tj[:DIM_POSE]
                 self.xi[idx_j:idx_j+DIM_MEAS] += xi_tj[DIM_POSE:]
 
@@ -471,6 +471,9 @@ class GraphSLAM:
 
 
     def plot(self):
+        
+        fig = plt.figure('map')
+
         plt.scatter(landmarks[:,0], landmarks[:,1], c='k')
 
         plt.plot(self.x_gt[:,0], self.x_gt[:,1], c='g')
@@ -479,18 +482,10 @@ class GraphSLAM:
         plt.scatter(self.m[:,0], self.m[:,1], c='r')
 
         plt.axis('equal')
-        # for t in range(len(self.z)):
-        #     zt = self.z[t]
-        #     x, y, theta = self.x[t]
-        #     for zi in zt:
-        #         r, phi, s = zi
 
-        #         if r <= 6:
-        #             phi += theta
-        #             mx = r*np.cos(phi) + x
-        #             my = r*np.sin(phi) + y
-
-        #             plt.scatter(mx, my, c='r')
+        plt.draw()
+        plt.waitforbuttonpress(0)
+        plt.close(fig)
 
 if __name__ == '__main__':
 
@@ -516,28 +511,13 @@ if __name__ == '__main__':
         slam.control(ut)
 
     slam.initialize()
-
-    fig = plt.figure('map')
-    
     slam.plot()
-
-    plt.draw()
-    plt.waitforbuttonpress(0)
-    plt.close(fig)
-
 
     # repeat
     for i in range(3):
         slam.linearize()
         slam.reduce()
         slam.solve()
-
-        fig = plt.figure('map')
         
         slam.plot()
-
-        plt.draw()
-        plt.waitforbuttonpress(0)
-        plt.close(fig)
-
 

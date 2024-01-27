@@ -37,14 +37,14 @@ DIM_MEAS = 2
 def deg2rad(x):
     return x * np.pi / 180.0
 
-STD_V = 1.0
+STD_V = 0.2
 STD_W = deg2rad(5)
 
-STD_R = 0.2
-STD_PHI = deg2rad(1)
+STD_R = 0.3
+STD_PHI = deg2rad(2)
 
 class GraphSLAM:
-    def __init__(self):        
+    def __init__(self):
         self.x_gt = [[0, 0, 0]] # ground truth pose
         self.x = [[0, 0, 0]]    # estimated pose
 
@@ -282,23 +282,28 @@ class GraphSLAM:
                 q = dx**2 + dy**2
                 r = np.sqrt(q)
 
-                phi_pred = np.arctan2(dy,dx) - theta
+                phi_pred = np.arctan2(dy,dx) - theta                
 
                 # phi_pred shall be [-pi, pi]
-                if phi_pred > np.pi:
+                # if phi_pred > np.pi:
+                #     phi_pred -= 2*np.pi
+                # elif phi_pred < -np.pi:
+                #     phi_pred += 2*np.pi
+
+                # Error Case
+                # phi = 3.14 - 0.1 = 3.04
+                # phi_pred = 3.14 - 0.1 + 0.2(noise) = 3.24 
+                # Since 3.24 > np.pi, 3.24 - 2*pi = -3.04
+                phi_error = zi[1,0] - phi_pred
+                if phi_error < -np.pi:
                     phi_pred -= 2*np.pi
-                elif phi_pred < -np.pi:
+                elif phi_error > np.pi:
                     phi_pred += 2*np.pi
 
                 zi_pred = np.array([
                     [r],
                     [phi_pred],
                 ])
-
-                # Hi = 1/q*np.array([
-                #     [-np.sqrt(q)*dx, -np.sqrt(q)*dy,  0, np.sqrt(q)*dx, np.sqrt(q)*dy],
-                #     [            dy,            -dx, -q,           -dy,            dx],
-                # ])
 
                 # dr/dx,   dr/dy,   dr/dtheta,   dr/dmx_j,   dr/dmy_j,   dr/dms_j
                 # dphi/dx, dphi/dy, dphi/dtheta, dphi/dmx_j, dphi/dmy_j, dphi/dms_j
@@ -641,8 +646,8 @@ class GraphSLAM:
                                     pair_found = True
 
                                     print('pair {}, {}, p:{}'.format(j, k, p))
-                                    # print('  ', self.m[j].T)
-                                    # print('  ', self.m[k].T)
+                                    print('  ', self.m[j].T)
+                                    print('  ', self.m[k].T)
 
                                     # for all ci=k, set ci=j (line 11)
                                     for idx_c in range(len(self.cor)):
@@ -701,7 +706,10 @@ class GraphSLAM:
         m_landmarks = []
         for idx_m in range(len(self.m)):
             if self.cor[idx_m] == idx_m:
-                m_landmarks.append(self.m[idx_m])
+                m = self.m[idx_m]
+                plt.text(m[0], m[1], '{:d}'.format(idx_m))
+
+                m_landmarks.append(m)
         m_landmarks = np.array(m_landmarks)
 
         plt.scatter(m_landmarks[:,0], m_landmarks[:,1], c='r')

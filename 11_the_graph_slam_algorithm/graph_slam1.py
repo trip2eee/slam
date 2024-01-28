@@ -28,7 +28,7 @@ tm = 2  # time multiplier
 dt = 0.1/tm
 
 r_max = 10.0        # maximum detection range
-p_min_assoc = 0.5   # minimum association probability
+p_min_assoc = 0.3   # minimum association probability
 r_assoc = 3.0
 
 DIM_POSE = 3
@@ -37,7 +37,7 @@ DIM_MEAS = 2
 def deg2rad(x):
     return x * np.pi / 180.0
 
-STD_V = 0.2
+STD_V = 0.3
 STD_W = deg2rad(5)
 
 STD_R = 0.3
@@ -78,7 +78,7 @@ class GraphSLAM:
         theta_gt = theta0 + wt*dt
 
         self.x_gt.append([x_gt, y_gt, theta_gt])
-        
+
         # compute accumulated pose with noisy control
         vt += np.random.randn()*STD_V
         wt += np.random.randn()*STD_W
@@ -215,8 +215,7 @@ class GraphSLAM:
                 [0, 0, 1],
             ])
             
-            # s_v = 1.0 + STD_V*dt
-            # s_w = 1.0 + STD_W*dt
+
             s_v = STD_V*dt
             s_w = STD_W*dt
 
@@ -252,8 +251,6 @@ class GraphSLAM:
         for t in range(0, T):
             zt = self.z[t]
 
-            # s_r = 1.0 + STD_R
-            # s_phi = 1.0 + STD_PHI
             s_r = STD_R
             s_phi = STD_PHI
 
@@ -406,7 +403,7 @@ class GraphSLAM:
                 O_jk[:, idx_row:idx_row+DIM_POSE] += self.O_red[idx_j:idx_j+DIM_MEAS, idx_k:idx_k+DIM_POSE]
 
                 idx_row += DIM_POSE
-
+            
             # Marginal of pose k: 3x2 * 2x2* 2x1 = 3x1
             xi_kj = np.matmul(np.matmul(O_kj, invO_jj), xi_j)
 
@@ -508,7 +505,13 @@ class GraphSLAM:
 
         # implementation of Table 11.8 on page 364.
         tau_k = self.tau[k]
-        tau_jk = tau_j + tau_k
+        # tau_jk = tau_j + tau_k
+        tau_jk = tau_j.copy()
+        for tk in tau_k:
+            if tk not in tau_jk:
+                tau_jk.append(tk)
+            else:
+                print('{} duplicated'.format(tk))
 
         # line 2                
         idx_j = n*DIM_POSE + j*DIM_MEAS
@@ -536,28 +539,17 @@ class GraphSLAM:
                 
                 # S: Sigma_0:t
                 S_12 = self.S[idx_t1:idx_t1+DIM_POSE, idx_t2:idx_t2+DIM_POSE]
-                # make strictly symmetric
-                S_12 = (S_12 + S_12.T)*0.5
                 S_tjk_tjk[idx_row*DIM_POSE:(idx_row+1)*DIM_POSE, idx_col*DIM_POSE:(idx_col+1)*DIM_POSE] = S_12
 
         # O_tjk_jk: Omega_tau(j,k),jk
         O_tjk_jk = np.zeros([dim_tau*DIM_POSE, DIM_MEAS*2], dtype=np.float32)
-        O_jk_tjk = np.zeros([DIM_MEAS*2, dim_tau*DIM_POSE], dtype=np.float32)
-        
+
         for idx_row, t1 in enumerate(tau_jk):
-
             idx_t1 = t1*DIM_POSE
-
             O_tjk_jk[idx_row*DIM_POSE:(idx_row+1)*DIM_POSE, 0:DIM_MEAS] = self.O[idx_t1:idx_t1+DIM_POSE, idx_j:idx_j+DIM_MEAS]
             O_tjk_jk[idx_row*DIM_POSE:(idx_row+1)*DIM_POSE,  DIM_MEAS:] = self.O[idx_t1:idx_t1+DIM_POSE, idx_k:idx_k+DIM_MEAS]
 
-            O_jk_tjk[0:DIM_MEAS,idx_row*DIM_POSE:(idx_row+1)*DIM_POSE] = self.O[idx_j:idx_j+DIM_MEAS, idx_t1:idx_t1+DIM_POSE]
-            O_jk_tjk[DIM_MEAS: ,idx_row*DIM_POSE:(idx_row+1)*DIM_POSE] = self.O[idx_k:idx_k+DIM_MEAS, idx_t1:idx_t1+DIM_POSE]
-
-        # print(S_tjk_tjk)
-        # print(O_tjk_jk)
-
-        # O_jk_tjk = O_tjk_jk.T
+        O_jk_tjk = O_tjk_jk.T
 
         # O_jk: O_[j,k]
         O_jk = O_jk_jk - np.matmul(np.matmul(O_jk_tjk, S_tjk_tjk), O_tjk_jk)
@@ -593,22 +585,20 @@ class GraphSLAM:
         xi_djk = np.matmul(I.T, xi_jk)
 
         # line 6
-        invO_djk = np.linalg.inv(O_djk)
+        invO_djk = np.linalg.inv(O_djk) # = Sigma_djk
         mu_djk = np.matmul(invO_djk, xi_djk)
         
         # line 7
-        det = np.linalg.det(invO_djk)
-        if det > 0.0:
-            eta = (2*np.pi*det)**-0.5
+        det = np.linalg.det(invO_djk)   # = det(Sigma_jk)
+        det = max(det, 1e-6)
+        eta = 1 / (2*np.pi*np.sqrt(det))
 
-            x = np.matmul(np.matmul(mu_djk.T, invO_djk), mu_djk)
-            if x >= -1:
-                p = eta * np.exp(-0.5 * np.matmul(np.matmul(mu_djk.T, invO_djk), mu_djk))
-                p = p[0,0]
-            else:
-                p = 0
+        x = np.matmul(np.matmul(mu_djk.T, O_djk), mu_djk)
+        if x >= 0.0:
+            p = eta * np.exp(-0.5 * x)
+            p = p[0,0]
         else:
-            p = 0
+            p = 1.0
 
         return p
 
@@ -662,7 +652,7 @@ class GraphSLAM:
             self.solve()
 
             self.plot()
-            
+
     def draw_covariance(self, j, n_sig=2):
         # Draw Covariance
         if self.O is not None:
@@ -707,8 +697,7 @@ class GraphSLAM:
         for idx_m in range(len(self.m)):
             if self.cor[idx_m] == idx_m:
                 m = self.m[idx_m]
-                plt.text(m[0], m[1], '{:d}'.format(idx_m))
-
+                # plt.text(m[0], m[1], '{:d}'.format(idx_m))
                 m_landmarks.append(m)
         m_landmarks = np.array(m_landmarks)
 

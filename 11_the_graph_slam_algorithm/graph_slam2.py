@@ -1,6 +1,8 @@
 """ GraphSLAM with unknown correspondence
     Table 11.1, 11.2, 11.3, 11.4, 11.8, and 11.9
     on page 347~365
+
+    Closed Loop Test
 """
 
 import numpy as np
@@ -37,8 +39,6 @@ DIM_MEAS = 2
 def deg2rad(x):
     return x * np.pi / 180.0
 
-# The larger the ego-motion noise, the larger measurement noise covariance,
-# which means that measurement association gates get wider.
 STD_V = 0.5
 STD_W = deg2rad(5)
 
@@ -725,8 +725,8 @@ if __name__ == '__main__':
 
     slam = GraphSLAM()
 
-    # Robot maneuver
-    for t in range(21*tm):
+    # Robot maneuver (with loop closing)
+    for t in range(30*tm):
         if t <= 7*tm:
             ut = [25, 0.001]
         elif t <= 9*tm:
@@ -735,9 +735,13 @@ if __name__ == '__main__':
             ut = [25, 0.001]
         elif t <= 12*tm:
             ut = [25, -np.pi/2*5]
-        elif t <= 16*tm:
-            ut = [25, 0.001]
         elif t <= 17*tm:
+            ut = [25, 0.001]
+        elif t <= 19*tm:
+            ut = [25, -np.pi/2*5]
+        elif t <= 20*tm:
+            ut = [25, 0.001]
+        elif t <= 22*tm:
             ut = [25, -np.pi/2*5]
         else:
             ut = [25, 0.001]

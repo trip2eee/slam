@@ -633,23 +633,21 @@ class GraphSLAM:
                     for k in range(M):
                         if j != k and self.cor[k] == k:
 
-                            if self.cor[j] != self.cor[k]:
-                                p = self.correspondence_test(j, k)  # (line 9)
+                            p = self.correspondence_test(j, k)  # (line 9)
+                            if p_min_assoc < p:
+                                pair_found = True
 
-                                if p_min_assoc < p:
-                                    pair_found = True
+                                print('pair {}, {}, p:{}'.format(j, k, p))
+                                print('  ', self.m[j].T)
+                                print('  ', self.m[k].T)
 
-                                    print('pair {}, {}, p:{}'.format(j, k, p))
-                                    print('  ', self.m[j].T)
-                                    print('  ', self.m[k].T)
+                                # for all ci=k, set ci=j (line 11)
+                                for idx_c in range(len(self.cor)):
+                                    if self.cor[idx_c] == k:
+                                        self.cor[idx_c] = j
 
-                                    # for all ci=k, set ci=j (line 11)
-                                    for idx_c in range(len(self.cor)):
-                                        if self.cor[idx_c] == k:
-                                            self.cor[idx_c] = j
-
-                                    self.tau[j] += self.tau[k]
-                                    self.tau[k] = []
+                                self.tau[j] += self.tau[k]
+                                self.tau[k] = []
 
             self.linearize()
             self.reduce()

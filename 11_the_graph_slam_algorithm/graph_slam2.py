@@ -3,6 +3,8 @@
     on page 347~365
 
     Closed Loop Test
+    TODO:
+        1. Further improvement using Conjugate Gradient
 """
 
 import numpy as np
@@ -30,7 +32,7 @@ tm = 2  # time multiplier
 dt = 0.1/tm
 
 r_max = 10.0        # maximum detection range
-p_min_assoc = 0.3   # minimum association probability
+p_min_assoc = 0.5   # minimum association probability
 r_assoc = 3.0
 
 DIM_POSE = 3

@@ -473,6 +473,7 @@ class FastSLAM:
 
     def plot(self):
         fig = plt.figure('map')
+        plt.clf()
 
         plt.scatter(landmarks[:,0], landmarks[:,1], c='k')
         
@@ -524,12 +525,9 @@ class FastSLAM:
             plt.scatter(m_j[0,0], m_j[1,0], c='b')
             plt.text(m_j[0,0], m_j[1,0], 'F{}'.format(f_j.id))
 
-
         plt.axis('equal')
-
         plt.draw()
-        plt.waitforbuttonpress(1)
-        plt.close(fig)
+        plt.waitforbuttonpress(0.1)
 
 if __name__ == '__main__':
 
@@ -559,6 +557,8 @@ if __name__ == '__main__':
             ut = [25, 0.001]
         
         slam.control(ut)
+    
+    plt.show()
 
 
 

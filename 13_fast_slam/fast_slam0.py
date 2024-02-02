@@ -173,6 +173,11 @@ class FastSLAM:
         r = np.sqrt(dx**2 + dy**2)
         phi = np.arctan2(dy,dx) - xt[2,0]
 
+        if phi > np.pi:
+            phi -= np.pi*2
+        elif phi < -np.pi:
+            phi += np.pi*2
+        
         z_pred = np.array([[r, phi]]).T
 
         return z_pred
@@ -228,8 +233,8 @@ class FastSLAM:
                         H = self.jacobian_H(x_k1, m_j)
 
                         # Initialize Covariance
-                        std_r0 = STD_R*2
-                        std_phi0 = STD_PHI*2
+                        std_r0 = STD_R*1
+                        std_phi0 = STD_PHI*1
                         Qt = np.array([
                             [std_r0**2, 0.0],
                             [0.0, std_phi0**2]
@@ -246,8 +251,8 @@ class FastSLAM:
                         # Calculate Jacobian (line 13)
                         H = self.jacobian_H(x_k1, m_j)
                         
-                        std_r = 1.0 + STD_R
-                        std_phi = 1.0 + STD_PHI
+                        std_r = STD_R*1
+                        std_phi = STD_PHI*1
                         Qt = np.array([
                             [std_r**2, 0.0],
                             [0.0, std_phi**2]
@@ -343,7 +348,8 @@ class FastSLAM:
 
     def plot(self):
         fig = plt.figure('map')
-
+        plt.clf()
+        
         plt.scatter(landmarks[:,0], landmarks[:,1], c='k')
         
         k_best = 0
@@ -378,10 +384,8 @@ class FastSLAM:
 
 
         plt.axis('equal')
-
         plt.draw()
-        plt.waitforbuttonpress(0)
-        plt.close(fig)
+        plt.waitforbuttonpress(0.1)
 
 if __name__ == '__main__':
 
@@ -410,5 +414,5 @@ if __name__ == '__main__':
         
         slam.control(ut)
 
-
+    plt.show()
 

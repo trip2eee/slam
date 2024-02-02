@@ -1,4 +1,4 @@
-# Slam
+# SLAM
 Simultaneous Localization and Mapping (SLAM)
 
 ## Development Environment

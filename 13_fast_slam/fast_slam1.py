@@ -1,5 +1,5 @@
-""" Fast SLAM 1.0 with known correspondence
-    Table 13.1 on page 450.
+""" Fast SLAM 1.0 with unknown correspondence
+    Table 13.2 on page 461.
 """
 
 import numpy as np
@@ -36,22 +36,61 @@ STD_R = 0.5
 STD_PHI = deg2rad(5)
 
 P0 = 0.1    # default importance weight
+thres_sig = 2
 
 alpha = [0.02, 0.01,  # v_t
          0.01, 0.02,  # w_t
          0.01, 0.01]  # hat
 
+
+class Feature:
+    def __init__(self, m=None, Cov=None):
+        self.m = m         # mean value
+        self.Cov = Cov     # covariance
+        self.i = 1         # observed count
+        self.z_pred = None # predicted measurement
+        self.H = None      # Jacobian of h()        
+        self.S = None
+        self.invS = None
+        self.assoc = True
+        self.z = None
+        self.w = 0
+        self.id = 0
+
+    def copy(self):
+        f = Feature()
+        f.m = self.m.copy()
+        f.Cov = self.Cov.copy()
+        f.i = self.i
+        f.w = self.w
+        f.id = self.id
+
+        if self.z_pred is not None:
+            f.z_pred = self.z_pred.copy()
+            f.H = self.H.copy()
+            f.S = self.S.copy()
+            f.invS = self.invS.copy()
+            f.assoc = self.assoc
+        
+        if self.z is not None:
+            f.z = self.z.copy()
+        return f
+
 class Particle:
     def __init__(self):
-        self.x = []               # robot path list
-        self.feature = [None]*L   # feature list
-        self.w = 0                # importance weight
+        self.x = []         # robot path list
+        self.feature = []   # feature list
+        self.w = 0          # importance weight
+        self.new_feature_id = 0
 
     def copy(self):
         y = Particle()
         y.x = self.x.copy()
-        y.feature = self.feature.copy()
+        y.feature = []
+        for f in self.feature:
+            y.feature.append(f.copy())
         y.w = self.w
+        y.new_feature_id = self.new_feature_id
 
         return y
 
@@ -59,8 +98,8 @@ class FastSLAM:
     def __init__(self):
         self.x_gt = [[0, 0, 0]] # ground truth pose
         self.x = [[0, 0, 0]]    # estimated pose
-        self.M = 100      # the number of particles
-        
+        self.M = 100            # the number of particles        
+
         self.Y = []     # list of particles
         for k in range(self.M):
             y = Particle()
@@ -70,7 +109,7 @@ class FastSLAM:
 
     def control(self, ut):
         vt, wt = ut
-       
+
         # compute ground truth pose
         x0 = self.x_gt[-1][0]
         y0 = self.x_gt[-1][1]
@@ -99,7 +138,7 @@ class FastSLAM:
         dy = my - y
         r = np.sqrt(dx**2 + dy**2)
         phi = np.arctan2(dy, dx) - theta
-        
+
         if 0 < r <= r_max:
             # valid sensing
 
@@ -111,7 +150,7 @@ class FastSLAM:
                 phi -= 2*np.pi
             elif phi < -np.pi:
                 phi += 2*np.pi
-            
+
             return np.array([[r, phi]]).T
         else:
             # invalid sensing
@@ -173,11 +212,16 @@ class FastSLAM:
         r = np.sqrt(dx**2 + dy**2)
         phi = np.arctan2(dy,dx) - xt[2,0]
 
+        if phi > np.pi:
+            phi -= np.pi*2
+        elif phi < -np.pi:
+            phi += np.pi*2
+
         z_pred = np.array([[r, phi]]).T
 
         return z_pred
     
-    def jacobian_H(self, xt, m_t):
+    def jacobian_H(self, m_t, xt):
 
         dx = m_t[0,0] - xt[0,0]
         dy = m_t[1,0] - xt[1,0]
@@ -210,26 +254,82 @@ class FastSLAM:
             x_k1 = np.array(x_k1).reshape([3,1])
             y_k.x.append(x_k1)
 
-            for j in range(L):
-                
-                zj = self.measure(landmarks[j])
+            # for each feature fj
+            f_j:Feature
+            for f_j in y_k.feature:
+                f_j.z_pred = self.h(f_j.m, x_k1)        # measurement prediction (line 6)
+                f_j.H = self.jacobian_H(f_j.m, x_k1)    # calculate Jacobian (line 7)
+
+                # measurement covariance
+                std_r = STD_R*1
+                std_phi = STD_PHI*1
+                Qt = np.array([
+                    [std_r**2, 0.0],
+                    [0.0, std_phi**2]
+                ])
+                H = f_j.H
+                Cov_j = f_j.Cov
+
+                # if f_j.id == 0:
+                #     print(Cov_j)
+                    
+                S = np.matmul(np.matmul(H, Cov_j), H.T) + Qt
+                invS = np.linalg.inv(S)
+
+                f_j.S = S
+                f_j.invS = invS
+                f_j.assoc = False
+                f_j.z = None
+
+            # for each measurement
+            num_features = len(y_k.feature) # the number of valid features N^k_{t-1}
+            for lm_id, lm in enumerate(landmarks):
+
+                z = self.measure(lm)
+
                 # if the measurement is valid
-                if zj[0,0] <= r_max:
+                if z[0,0] <= r_max:
+                    
+                    c = -1        # correspondence
+                    w_max = 0    # maximum likelihood of correspondence
+                    for j in range(num_features):
+                        f_j = y_k.feature[j]
+                        z_pred = f_j.z_pred
+                        invS = f_j.invS
+                        r = z - z_pred
 
-                    # if feature j never seen before
-                    if y_k.feature[j] is None:
+                        if r[1,0] > np.pi:
+                            r[1,0] -= np.pi*2
+                        elif r[1,0] < -np.pi:
+                            r[1,0] += np.pi*2
 
-                        # initialize mean   (line 7)
-                        # mu^k_j,t = h^-1(zt, x^k_t)
-                        m_jx, m_jy = self.inv_h(zj, x_k1)
+                        d2_Mahalanobis = np.matmul(np.matmul(r.T, invS), r)
+
+                        detS = np.linalg.det(f_j.S)
+                        eta = 1/(2*np.pi*np.sqrt(detS))
+                        w = eta*np.exp(-0.5*d2_Mahalanobis)
+                        w = w[0,0]
+
+                        # print('d(L{}, F{}): {}, {}'.format(lm_id, j, d2_Mahalanobis, w))
+                        if d2_Mahalanobis <= thres_sig**2:
+                            if w_max < w:
+                                w_max = w
+                                c = j
+
+                    # if feature j is a new feature (line 16)
+                    if c == -1:
+                        # print('L{} not associated, {}, {}'.format(lm_id, min_d, w_max))
+
+                        # initialize mean mu^k_j,t = h^-1(zt, x^k_t)  (line 17)
+                        m_jx, m_jy = self.inv_h(z, x_k1)
                         m_j = np.array([[m_jx, m_jy]]).T
 
                         # Calculate Jacobian (line 8)
-                        H = self.jacobian_H(x_k1, m_j)
+                        H = self.jacobian_H(m_j, x_k1)
 
                         # Initialize Covariance
-                        std_r0 = STD_R*2
-                        std_phi0 = STD_PHI*2
+                        std_r0 = STD_R*1
+                        std_phi0 = STD_PHI*1
                         Qt = np.array([
                             [std_r0**2, 0.0],
                             [0.0, std_phi0**2]
@@ -237,44 +337,74 @@ class FastSLAM:
                         invH = np.linalg.inv(H)
                         Cov_j = np.matmul(np.matmul(invH, Qt), invH.T)
 
-                        y_k.feature[j] = [m_j, Cov_j]
-                        y_k.w = P0    # default importance weight
-                    else:
-                        m_j, Cov_j = y_k.feature[j]
-                        z_pred = self.h(m_j, x_k1)  # line 12
+                        f_j = Feature(m_j, Cov_j)
+                        f_j.H = H
+                        f_j.assoc = True
+                        f_j.z = z
+                        f_j.w = P0
+                        f_j.id = y_k.new_feature_id
+                        # print('create new feature {}'.format(f_j.id))
+                        y_k.new_feature_id += 1
 
-                        # Calculate Jacobian (line 13)
-                        H = self.jacobian_H(x_k1, m_j)
+                        y_k.feature.append(f_j)
+                    else:
+                        f_j:Feature
+                        f_j = y_k.feature[c]
+
+                        # print('L{} associated with F{}'.format(lm_id, f_j.id))
                         
-                        std_r = 1.0 + STD_R
-                        std_phi = 1.0 + STD_PHI
-                        Qt = np.array([
-                            [std_r**2, 0.0],
-                            [0.0, std_phi**2]
-                        ])
-                        S = np.matmul(np.matmul(H, Cov_j), H.T) + Qt
-                        invS = np.linalg.inv(S)
+                        z_pred = f_j.z_pred
+                        m_j = f_j.m
+                        H = f_j.H
+                        invS = f_j.invS
+                        Cov_j = f_j.Cov
+
                         K = np.matmul(np.matmul(Cov_j, H.T), invS)
                         I = np.eye(2)
 
-                        r = zj - z_pred
+                        r = z - z_pred
                         if r[1,0] > np.pi:
                             r[1,0] -= np.pi*2
                         elif r[1,0] < -np.pi:
                             r[1,0] += np.pi*2
 
-                        m_j = m_j + np.matmul(K, r)
-                        Cov_j = np.matmul((I - np.matmul(K, H)), Cov_j)
+                        f_j.m = m_j + np.matmul(K, r)
+                        f_j.Cov = np.matmul((I - np.matmul(K, H)), Cov_j)
 
-                        y_k.feature[j] = [m_j, Cov_j]
+                        f_j.i += 1
+                        f_j.assoc = True
+                        f_j.z = z
+                        f_j.w = w_max
 
-                        detS = np.linalg.det(S)
-                        y_k.w = 1/(2*np.pi*np.sqrt(detS)) * np.exp(-0.5*np.matmul(np.matmul(r.T, invS), r))
-                        y_k.w = y_k.w[0,0]
+            y_k.w = 1.0
+            num_assoc = 0
+            f_j:Feature
+            for f_j in y_k.feature:
+                if True == f_j.assoc:
+                    y_k.w *= f_j.w
+                    num_assoc += 1
                 else:
-                    # leave unobserved features unchanged
-                    pass
+                    m_x = f_j.m[0,0]
+                    m_y = f_j.m[1,0]
+
+                    x = x_k1[0,0]
+                    y = x_k1[1,0]
+
+                    dx = m_x - x
+                    dy = m_y - y
+                    r2 = dx**2 + dy**2
+                    f_j.w = P0
+
+                    # if the feature j is inside perceptual range of the robot
+                    if r2 <= r_max**2:
+                        f_j.i -= 1                  # decrement counter (line 31)
+                        if f_j.i < 0:
+                            # print('F{} discarded'.format(f_j.id))
+                            y_k.feature.remove(f_j) # discard feature j (line 33)
             
+            if num_assoc == 0:
+                y_k.w = P0
+
         # Resample
         Y1 = [] # initialize new particle set (line 25)
         
@@ -353,7 +483,6 @@ class FastSLAM:
 
             x_k = np.array(y_k.x)
             plt.plot(x_k[:,0,0], x_k[:,1,0], c='r')
-
             if y_k.w > self.Y[k_best].w:
                 k_best = k
 
@@ -370,17 +499,36 @@ class FastSLAM:
         self.draw_robot(y_k.x[-1], color='b')
 
         # draw features of the best particle
-        for j in range(L):
-            if y_k.feature[j] is not None:
-                m_j, Cov_j = y_k.feature[j]
-                plt.scatter(m_j[0,0], m_j[1,0], c='r')
-                # self.draw_covariance(m_j, Cov_j, n_sig=2)
+        f_j:Feature
+        for f_j in y_k.feature:
+            m_j = f_j.m
+            z_pred = f_j.z_pred
+            z = f_j.z
+            S = f_j.S
+            H = f_j.H
+            x_k1 = y_k.x[-1]
+
+            if z_pred is not None:
+                m_jx, m_jy = self.inv_h(z_pred, x_k1)
+                m_pred = np.array([[m_jx, m_jy]]).T
+                plt.scatter(m_pred[0,0], m_pred[1,0], c='c')
+
+                invH = np.linalg.inv(H)
+                Cov_j = np.matmul(np.matmul(invH, S), invH.T)
+                self.draw_covariance(m_pred, Cov_j, n_sig=thres_sig)
+
+            if z is not None:                
+                m_jx, m_jy = self.inv_h(z, x_k1)
+                plt.scatter(m_jx, m_jy, c='r')
+
+            plt.scatter(m_j[0,0], m_j[1,0], c='b')
+            plt.text(m_j[0,0], m_j[1,0], 'F{}'.format(f_j.id))
 
 
         plt.axis('equal')
 
         plt.draw()
-        plt.waitforbuttonpress(0)
+        plt.waitforbuttonpress(1)
         plt.close(fig)
 
 if __name__ == '__main__':
@@ -389,6 +537,8 @@ if __name__ == '__main__':
 
     # Robot maneuver (with loop closing)
     for t in range(30*tm):
+        print('t:', t)
+
         if t <= 7*tm:
             ut = [25, 0.001]
         elif t <= 9*tm:

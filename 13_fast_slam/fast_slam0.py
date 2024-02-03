@@ -182,7 +182,7 @@ class FastSLAM:
 
         return z_pred
     
-    def jacobian_H(self, xt, m_t):
+    def jacobian_H(self, m_t, xt):
 
         dx = m_t[0,0] - xt[0,0]
         dy = m_t[1,0] - xt[1,0]
@@ -230,7 +230,7 @@ class FastSLAM:
                         m_j = np.array([[m_jx, m_jy]]).T
 
                         # Calculate Jacobian (line 8)
-                        H = self.jacobian_H(x_k1, m_j)
+                        H = self.jacobian_H(m_j, x_k1)
 
                         # Initialize Covariance
                         std_r0 = STD_R*1
@@ -249,7 +249,7 @@ class FastSLAM:
                         z_pred = self.h(m_j, x_k1)  # line 12
 
                         # Calculate Jacobian (line 13)
-                        H = self.jacobian_H(x_k1, m_j)
+                        H = self.jacobian_H(m_j, x_k1)
                         
                         std_r = STD_R*1
                         std_phi = STD_PHI*1

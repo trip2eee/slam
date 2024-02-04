@@ -1,5 +1,5 @@
 """ Fast SLAM 1.0 with unknown correspondence
-    Table 13.2 on page 461.
+    Modified implementation of Table 13.2 on page 461.
 """
 
 import numpy as np
@@ -33,7 +33,7 @@ def deg2rad(x):
     return x * np.pi / 180.0
 
 STD_R = 0.5
-STD_PHI = deg2rad(5)
+STD_PHI = deg2rad(3)
 
 P0 = 0.1    # default importance weight
 thres_sig = 2

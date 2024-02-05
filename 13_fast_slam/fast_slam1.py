@@ -35,7 +35,7 @@ def deg2rad(x):
 STD_R = 0.5
 STD_PHI = deg2rad(3)
 
-P0 = 0.1    # default importance weight
+P0 = 0.01    # default importance weight
 thres_sig = 2
 
 alpha = [0.02, 0.01,  # v_t
@@ -50,9 +50,9 @@ class Feature:
         self.i = 1         # observed count
         self.z_pred = None # predicted measurement
         self.H = None      # Jacobian of h()        
-        self.S = None
-        self.invS = None
-        self.assoc = True
+        self.Q = None
+        self.invQ = None
+        self.updated = True
         self.z = None
         self.w = 0
         self.id = 0
@@ -68,9 +68,9 @@ class Feature:
         if self.z_pred is not None:
             f.z_pred = self.z_pred.copy()
             f.H = self.H.copy()
-            f.S = self.S.copy()
-            f.invS = self.invS.copy()
-            f.assoc = self.assoc
+            f.Q = self.Q.copy()
+            f.invQ = self.invQ.copy()
+            f.updated = self.updated
         
         if self.z is not None:
             f.z = self.z.copy()
@@ -273,13 +273,13 @@ class FastSLAM:
                 # if f_j.id == 0:
                 #     print(Cov_j)
                     
-                S = np.matmul(np.matmul(H, Cov_j), H.T) + Qt
-                invS = np.linalg.inv(S)
+                Q = np.matmul(np.matmul(H, Cov_j), H.T) + Qt
+                invQ = np.linalg.inv(Q)
 
-                f_j.S = S
-                f_j.invS = invS
-                f_j.assoc = False
-                f_j.z = None
+                f_j.Q = Q
+                f_j.invQ = invQ
+                f_j.updated = False     # not updated, not created
+                f_j.z = None            # no correspondence
 
             # for each measurement
             num_features = len(y_k.feature) # the number of valid features N^k_{t-1}
@@ -295,7 +295,7 @@ class FastSLAM:
                     for j in range(num_features):
                         f_j = y_k.feature[j]
                         z_pred = f_j.z_pred
-                        invS = f_j.invS
+                        invQ = f_j.invQ
                         r = z - z_pred
 
                         if r[1,0] > np.pi:
@@ -303,15 +303,13 @@ class FastSLAM:
                         elif r[1,0] < -np.pi:
                             r[1,0] += np.pi*2
 
-                        d2_Mahalanobis = np.matmul(np.matmul(r.T, invS), r)
-
-                        detS = np.linalg.det(f_j.S)
-                        eta = 1/(2*np.pi*np.sqrt(detS))
-                        w = eta*np.exp(-0.5*d2_Mahalanobis)
-                        w = w[0,0]
-
-                        # print('d(L{}, F{}): {}, {}'.format(lm_id, j, d2_Mahalanobis, w))
+                        d2_Mahalanobis = np.matmul(np.matmul(r.T, invQ), r)
                         if d2_Mahalanobis <= thres_sig**2:
+                            detQ = np.linalg.det(f_j.Q)
+                            eta = 1/(2*np.pi*np.sqrt(detQ))
+                            w = eta*np.exp(-0.5*d2_Mahalanobis)
+                            w = w[0,0]
+                        
                             if w_max < w:
                                 w_max = w
                                 c = j
@@ -339,8 +337,8 @@ class FastSLAM:
 
                         f_j = Feature(m_j, Cov_j)
                         f_j.H = H
-                        f_j.assoc = True
-                        f_j.z = z
+                        f_j.updated = True
+                        f_j.z = None    # no correspondence
                         f_j.w = P0
                         f_j.id = y_k.new_feature_id
                         # print('create new feature {}'.format(f_j.id))
@@ -356,10 +354,10 @@ class FastSLAM:
                         z_pred = f_j.z_pred
                         m_j = f_j.m
                         H = f_j.H
-                        invS = f_j.invS
+                        invQ = f_j.invQ
                         Cov_j = f_j.Cov
 
-                        K = np.matmul(np.matmul(Cov_j, H.T), invS)
+                        K = np.matmul(np.matmul(Cov_j, H.T), invQ)
                         I = np.eye(2)
 
                         r = z - z_pred
@@ -372,7 +370,7 @@ class FastSLAM:
                         f_j.Cov = np.matmul((I - np.matmul(K, H)), Cov_j)
 
                         f_j.i += 1
-                        f_j.assoc = True
+                        f_j.updated = True
                         f_j.z = z
                         f_j.w = w_max
 
@@ -380,7 +378,7 @@ class FastSLAM:
             num_assoc = 0
             f_j:Feature
             for f_j in y_k.feature:
-                if True == f_j.assoc:
+                if True == f_j.updated:
                     y_k.w *= f_j.w
                     num_assoc += 1
                 else:
@@ -499,13 +497,17 @@ class FastSLAM:
         plt.plot(x_k[:,0,0], x_k[:,1,0], c='b')
         self.draw_robot(y_k.x[-1], color='b')
 
+        err_path = (x_gt - x_k[:,:,0])
+        err_rms = np.sqrt(np.mean(err_path[:,0]**2 + err_path[:,1]**2))
+        print('path error:', err_rms)
+
         # draw features of the best particle
         f_j:Feature
         for f_j in y_k.feature:
             m_j = f_j.m
             z_pred = f_j.z_pred
             z = f_j.z
-            S = f_j.S
+            Q = f_j.Q
             H = f_j.H
             x_k1 = y_k.x[-1]
 
@@ -515,7 +517,7 @@ class FastSLAM:
                 plt.scatter(m_pred[0,0], m_pred[1,0], c='c')
 
                 invH = np.linalg.inv(H)
-                Cov_j = np.matmul(np.matmul(invH, S), invH.T)
+                Cov_j = np.matmul(np.matmul(invH, Q), invH.T)
                 self.draw_covariance(m_pred, Cov_j, n_sig=thres_sig)
 
             if z is not None:                

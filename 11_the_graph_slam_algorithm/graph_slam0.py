@@ -296,9 +296,8 @@ class GraphSLAM:
                     # [m_js]
                 ])
 
-                # dr/dx,   dr/dy,   dr/dtheta,   dr/dmx_j,   dr/dmy_j,   dr/dms_j
-                # dphi/dx, dphi/dy, dphi/dtheta, dphi/dmx_j, dphi/dmy_j, dphi/dms_j
-                # ds/dx,   ds/dy,   ds/dtheta,   ds/dmx_j,   ds/dmy_j,   ds/dms_j
+                # dr/dx,   dr/dy,   dr/dtheta,   dr/dmx_j,   dr/dmy_j
+                # dphi/dx, dphi/dy, dphi/dtheta, dphi/dmx_j, dphi/dmy_j
                 Hi = np.array([
                     [-dx/r, -dy/r,  0,  dx/r, dy/r],
                     [ dy/q, -dx/q, -1, -dy/q, dx/q],
